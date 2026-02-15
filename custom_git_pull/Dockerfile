@@ -5,6 +5,7 @@ FROM $BUILD_FROM
 RUN apk add --no-cache jq curl git openssh-client
 
 # Copy data
+COPY data/lib/ /lib/
 COPY data/run.sh /
 
 CMD [ "/run.sh" ]
