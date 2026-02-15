@@ -1,96 +1,30 @@
-# Home Assistant Apps: The official repository
+# Dylan's Home Assistant Custom Addons
 
-Apps (formerly known as add-ons) for Home Assistant allow you to extend the functionality
-around your Home Assistant setup. These apps can consist of an application
-that Home Assistant can integrate with (e.g., a [MQTT broker](/mosquitto/README.md) or [database server](/mariadb/README.md))
-or allow access to your Home Assistant configuration (e.g., via [Samba](/samba/README.md) or using
-the [File Editor](/configurator/README.md)).
+Custom Home Assistant addons for personal use.
 
-Apps can be installed and configured via the Home Assistant frontend on
-systems that have installed Home Assistant.
+## Addons
 
-[![Home Assistant - A project from the Open Home Foundation](https://www.openhomefoundation.org/badges/home-assistant.png)](https://www.openhomefoundation.org/)
+- **[Custom Git Pull](/custom_git_pull/README.md)**
 
-## Apps provided by this repository
+    Custom version of the Git Pull addon for syncing Home Assistant configuration from a Git repository.
 
-- **[CEC Scanner](/cec_scan/README.md)**
+## Installation
 
-    Scan & discover HDMI CEC devices and their addresses.
+To use this repository, add it as a custom addon repository in Home Assistant:
 
-- **[deCONZ](/deconz/README.md)**
+1. Go to **Settings** > **Add-ons** > **Add-on Store**
+2. Click the three-dot menu in the top right and select **Repositories**
+3. Add this repository URL: `https://github.com/dylanl321/ha-addons`
+4. Click **Add** and then **Close**
+5. Refresh the page and the custom addons will appear in the store
 
-    Control a Zigbee network using ConBee or RaspBee hardware by dresden elektronik.
+## Development
 
-- **[Dnsmasq](/dnsmasq/README.md)**
+Each addon lives in its own folder with:
 
-    A simple DNS server.
+- `config.yaml` - Addon metadata, options schema, and image reference
+- `build.yaml` - Multi-architecture base image mappings
+- `Dockerfile` - Container build instructions
+- `data/` or `rootfs/` - Runtime scripts and filesystem overlay
 
-- **[Duck DNS](/duckdns/README.md)**
-
-    Automatically update your Duck DNS IP address with integrated HTTPS support via Let's Encrypt.
-
-- **[File editor](/configurator/README.md)**
-
-    Simple browser-based file editor for Home Assistant.
-
-- **[Git pull](/git_pull/README.md)**
-
-    Load and update configuration files for Home Assistant from a Git repository.
-
-- **[Let's Encrypt](/letsencrypt/README.md)**
-
-    Manage and create certificates from Let's Encrypt.
-
-- **[MariaDB](/mariadb/README.md)**
-
-    MariaDB database for Home Assistant.
-
-- **[Mosquitto broker](/mosquitto/README.md)**
-
-    An Open Source MQTT broker.
-
-- **[NGINX Home Assistant SSL proxy](/nginx_proxy/README.md)**
-
-    Sets up an SSL proxy with NGINX and redirects traffic from port 80 to 443.
-
-- **[RPC Shutdown](/rpc_shutdown/README.md)**
-
-    Shutdown Windows machines remotely.
-
-- **[Samba share](/samba/README.md)**
-
-    Share your configuration over the network using Windows file sharing.
-
-- **[SSH server](/ssh/README.md)**
-
-    Allow logging in remotely to Home Assistant using SSH or just the web terminal with Ingress.
-
-- **[Z-Wave JS](/zwave_js/README.md)**
-
-    Allow Home Assistant to talk to a Z-Wave Network via a USB Controller.
-
-## Support
-
-Got questions?
-
-You have several options to get them answered:
-
-- The [Home Assistant Discord Chat Server][discord].
-- The Home Assistant [Community Forum][forum].
-- Join the [Reddit subreddit][reddit] in [/r/homeassistant][reddit].
-
-In case you've found a bug, please [open an issue on our GitHub][issue].
-
-## Developing your own apps
-
-In case you are interested in developing your own app, this
-repository can be a great source of inspiration. For more information
-about developing an app, please see our
-[documentation for developers][dev-docs].
-
-[discord]: https://discord.gg/c5DvZ4e
-[forum]: https://community.home-assistant.io
-[i386-shield]: https://img.shields.io/badge/i386-no-red.svg
-[issue]: https://github.com/home-assistant/addons/issues
-[reddit]: https://reddit.com/r/homeassistant
-[dev-docs]: https://developers.home-assistant.io/docs/add-ons/
+Pushing to `main` triggers the CI workflow which builds Docker images for each changed addon and publishes them to GitHub Container Registry (GHCR).
