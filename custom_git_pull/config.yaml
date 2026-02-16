@@ -4,7 +4,6 @@ slug: custom_git_pull
 name: Custom Git Pull
 description: Custom git pull to update the local configuration
 url: https://github.com/dylanl321/ha-addons/tree/main/custom_git_pull
-advanced: true
 arch:
   - aarch64
   - amd64
