@@ -232,9 +232,8 @@ function ssh::check-connection {
     local domain="${GIT_URL_PARTS[0]}"
 
     local output
-    local exit_code
-    output=$(ssh -T -o "StrictHostKeyChecking=no" -o "BatchMode=yes" -o "ConnectTimeout=10" "$domain" 2>&1)
-    exit_code=$?
+    local exit_code=0
+    output=$(ssh -T -o "StrictHostKeyChecking=no" -o "BatchMode=yes" -o "ConnectTimeout=10" "$domain" 2>&1) || exit_code=$?
 
     # GitHub returns exit code 1 even on success, with a "successfully authenticated" message
     if [ $exit_code -eq 0 ]; then
@@ -258,8 +257,8 @@ function ssh::check-connection {
     log::warning "Attempting to re-setup SSH key from config..."
     if ssh::setup-key; then
         # Retry connection
-        output=$(ssh -T -o "StrictHostKeyChecking=no" -o "BatchMode=yes" -o "ConnectTimeout=10" "$domain" 2>&1)
-        exit_code=$?
+        exit_code=0
+        output=$(ssh -T -o "StrictHostKeyChecking=no" -o "BatchMode=yes" -o "ConnectTimeout=10" "$domain" 2>&1) || exit_code=$?
         if [ $exit_code -eq 0 ] || \
            { [[ "$domain" = *"@github.com"* ]] && [[ "$output" = *"successfully authenticated"* ]]; } || \
            { [[ "$domain" = *"@gitlab.com"* ]] && [[ "$output" = *"Welcome to GitLab"* ]]; } || \

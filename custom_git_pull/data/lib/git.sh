@@ -106,8 +106,8 @@ function git::synchronize {
         log::info "Switching to branch ${GIT_BRANCH}..."
         if ! git checkout "$GIT_BRANCH"; then
             log::error "Git checkout failed -- restoring from backup"
-            git merge --abort &>/dev/null
-            git checkout --force "$GIT_CURRENT_BRANCH" &>/dev/null
+            git merge --abort &>/dev/null || true
+            git checkout --force "$GIT_CURRENT_BRANCH" &>/dev/null || true
             backup::restore "$backup_location"
             return 1
         fi
@@ -122,7 +122,7 @@ function git::synchronize {
             if ! git pull; then
                 log::error "Git pull failed"
                 # Clean up any merge conflict state
-                git merge --abort &>/dev/null
+                git merge --abort &>/dev/null || true
                 git_op_failed=true
             fi
             ;;
