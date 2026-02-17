@@ -54,7 +54,7 @@ function backup::restore {
     log::warning "Restoring /config from backup: ${backup_location}"
 
     # Clear current /config contents (including hidden files)
-    rm -rf /config/{,.[!.],..?}*
+    find /config -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
 
     # Restore from backup
     if ! cp -a "${backup_location}/." /config/; then

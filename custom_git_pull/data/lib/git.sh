@@ -14,7 +14,18 @@ function git::clone {
 
     # Remove /config folder content (including hidden files)
     log::info "Clearing /config for fresh clone..."
-    rm -rf /config/{,.[!.],..?}*
+    find /config -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+
+    # Verify /config is actually empty before cloning
+    local remaining
+    remaining=$(find /config -mindepth 1 -maxdepth 1 | head -5)
+    if [ -n "$remaining" ]; then
+        log::error "Failed to fully clear /config, remaining items:"
+        log::error "$remaining"
+        log::error "Restoring from backup"
+        backup::restore "$backup_location"
+        bashio::exit.nok "/config could not be cleared for clone"
+    fi
 
     # git clone
     log::info "Starting git clone of ${REPOSITORY}"
