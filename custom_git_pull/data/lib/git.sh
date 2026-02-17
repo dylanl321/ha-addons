@@ -43,7 +43,19 @@ function git::clone {
     fi
 
     # Determine the branch to checkout
-    local target_branch="${GIT_BRANCH:-master}"
+    local target_branch="${GIT_BRANCH:-main}"
+
+    # Verify the branch exists on the remote
+    if ! git rev-parse --verify "${GIT_REMOTE}/${target_branch}" &>/dev/null; then
+        local available_branches
+        available_branches=$(git branch -r | sed 's/^[[:space:]]*//' | tr '\n' ', ')
+        log::error "Branch '${target_branch}' does not exist on remote '${GIT_REMOTE}'"
+        log::error "Available remote branches: ${available_branches}"
+        log::error "Update the git_branch setting in the addon configuration to match your repo"
+        rm -rf /config/.git
+        backup::restore "$backup_location"
+        bashio::exit.nok "Branch '${target_branch}' not found. Available: ${available_branches}"
+    fi
 
     log::info "Checking out branch ${target_branch}..."
     if ! git checkout -f -B "$target_branch" "${GIT_REMOTE}/${target_branch}"; then

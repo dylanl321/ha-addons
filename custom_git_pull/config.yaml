@@ -1,5 +1,5 @@
 ---
-version: 2.0.6
+version: 2.0.7
 slug: custom_git_pull
 name: Custom Git Pull
 description: Custom git pull to update the local configuration
@@ -16,7 +16,7 @@ map:
   - config:rw
 options:
   repository: null
-  git_branch: master
+  git_branch: main
   git_remote: origin
   auto_restart: false
   restart_ignore:
