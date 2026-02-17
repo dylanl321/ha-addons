@@ -12,56 +12,48 @@ function git::clone {
         bashio::exit.nok "Clone aborted -- backup failed"
     fi
 
-    # Remove /config folder content (including hidden files)
-    log::info "Clearing /config for fresh clone..."
-    find /config -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+    # Initialize git repo in-place instead of cloning into /config
+    # git clone requires an empty directory, but /config is a Docker bind mount
+    # that can't be fully emptied. git init + fetch + reset achieves the same
+    # result and naturally preserves untracked files (secrets, .storage, etc.)
+    log::info "Initializing git repository in /config..."
 
-    # Verify /config is actually empty before cloning
-    local remaining
-    remaining=$(find /config -mindepth 1 -maxdepth 1 | head -5)
-    if [ -n "$remaining" ]; then
-        log::error "Failed to fully clear /config, remaining items:"
-        log::error "$remaining"
-        log::error "Restoring from backup"
+    cd /config || bashio::exit.nok "Cannot cd into /config"
+
+    if ! git init; then
+        log::error "git init failed -- restoring from backup"
         backup::restore "$backup_location"
-        bashio::exit.nok "/config could not be cleared for clone"
+        bashio::exit.nok "git init failed"
     fi
 
-    # git clone
-    log::info "Starting git clone of ${REPOSITORY}"
-    if ! git clone "$REPOSITORY" /config; then
-        log::error "Git clone failed -- restoring from backup"
+    log::info "Adding remote ${GIT_REMOTE} -> ${REPOSITORY}"
+    if ! git remote add "$GIT_REMOTE" "$REPOSITORY"; then
+        log::error "git remote add failed -- restoring from backup"
+        rm -rf /config/.git
         backup::restore "$backup_location"
-        bashio::exit.nok "Git clone failed, /config has been restored from backup"
+        bashio::exit.nok "git remote add failed"
     fi
 
-    # Restore non-git-tracked files from backup that HA needs
-    log::info "Restoring non-repo files from backup..."
-
-    # Restore secrets.yaml if it was in the backup but not in the repo
-    if [ -f "${backup_location}/secrets.yaml" ] && [ ! -f /config/secrets.yaml ]; then
-        cp -a "${backup_location}/secrets.yaml" /config/secrets.yaml
-        log::info "Restored secrets.yaml from backup"
+    log::info "Fetching from ${GIT_REMOTE}..."
+    if ! git fetch "$GIT_REMOTE"; then
+        log::error "git fetch failed -- restoring from backup"
+        rm -rf /config/.git
+        backup::restore "$backup_location"
+        bashio::exit.nok "git fetch failed, /config has been restored from backup"
     fi
 
-    # Restore hidden directories/files that are not part of the repo
-    # (e.g. .storage, .cloud, .google_maps, etc.)
-    for item in "${backup_location}"/.[!.]*; do
-        [ -e "$item" ] || continue
-        local name
-        name=$(basename "$item")
-        # Skip .git since we just cloned fresh
-        [ "$name" = ".git" ] && continue
-        # Skip our own log files
-        [[ "$name" = .git_pull* ]] && continue
-        # Only restore if it doesn't exist in the clone
-        if [ ! -e "/config/${name}" ]; then
-            cp -a "$item" "/config/${name}"
-            log::info "Restored hidden item from backup: ${name}"
-        fi
-    done
+    # Determine the branch to checkout
+    local target_branch="${GIT_BRANCH:-master}"
 
-    log::info "Git clone complete"
+    log::info "Checking out branch ${target_branch}..."
+    if ! git checkout -f -B "$target_branch" "${GIT_REMOTE}/${target_branch}"; then
+        log::error "git checkout failed -- restoring from backup"
+        rm -rf /config/.git
+        backup::restore "$backup_location"
+        bashio::exit.nok "git checkout failed, /config has been restored from backup"
+    fi
+
+    log::info "Git clone (init + fetch + checkout) complete"
 }
 
 function git::synchronize {
