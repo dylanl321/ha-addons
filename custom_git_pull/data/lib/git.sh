@@ -167,6 +167,19 @@ function git::synchronize {
 function git::validate-config {
     log::info "Checking if anything changed..."
 
+    # On initial clone OLD_COMMIT is not set -- skip comparison
+    if [ -z "${OLD_COMMIT:-}" ]; then
+        log::info "Initial clone detected, skipping change comparison"
+        log::info "Validating Home Assistant configuration..."
+        if ! bashio::core.check; then
+            log::error "Configuration check FAILED after initial clone"
+            log::error "Fix your repository configuration before restarting HA"
+            return 1
+        fi
+        log::info "Configuration check passed"
+        return 0
+    fi
+
     NEW_COMMIT=$(git rev-parse HEAD)
     if [ "$NEW_COMMIT" == "$OLD_COMMIT" ]; then
         log::info "Nothing has changed."
