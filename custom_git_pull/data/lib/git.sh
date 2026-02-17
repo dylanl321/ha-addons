@@ -135,10 +135,24 @@ function git::synchronize {
         pull)
             log::info "Starting git pull..."
             if ! git pull; then
-                log::error "Git pull failed"
-                # Clean up any merge conflict state
+                log::warning "Git pull failed, attempting to resolve..."
+
+                # Abort any in-progress merge
                 git merge --abort &>/dev/null || true
-                git_op_failed=true
+
+                # Common cause: untracked local files conflict with incoming changes
+                # Reset tracked files and clean untracked files that exist in the repo
+                log::info "Cleaning working tree and retrying pull..."
+                git reset --hard HEAD &>/dev/null || true
+                git clean -fd &>/dev/null || true
+
+                if ! git pull; then
+                    log::error "Git pull failed even after cleaning working tree"
+                    git merge --abort &>/dev/null || true
+                    git_op_failed=true
+                else
+                    log::info "Git pull succeeded after working tree cleanup"
+                fi
             fi
             ;;
         reset)
