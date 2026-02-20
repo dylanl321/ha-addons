@@ -60,12 +60,24 @@ function git::clone {
     git::backup-conflicting-files "${GIT_REMOTE}/${target_branch}" "$backup_location"
 
     log::info "Checking out branch ${target_branch}..."
-    if ! git checkout -f -B "$target_branch" "${GIT_REMOTE}/${target_branch}"; then
-        log::error "git checkout failed -- restoring from backup"
+    # Use checkout --orphan + reset --hard instead of checkout -f.
+    # checkout -f from an empty branch wipes untracked files; reset --hard
+    # only touches files tracked by the target commit.
+    if ! git checkout --orphan "$target_branch"; then
+        log::error "git checkout --orphan failed -- restoring from backup"
         rm -rf /config/.git
         backup::restore "$backup_location"
-        bashio::exit.nok "git checkout failed, /config has been restored from backup"
+        bashio::exit.nok "git checkout --orphan failed, /config has been restored from backup"
     fi
+
+    if ! git reset --hard "${GIT_REMOTE}/${target_branch}"; then
+        log::error "git reset --hard failed -- restoring from backup"
+        rm -rf /config/.git
+        backup::restore "$backup_location"
+        bashio::exit.nok "git reset failed, /config has been restored from backup"
+    fi
+
+    git branch --set-upstream-to="${GIT_REMOTE}/${target_branch}" "$target_branch" &>/dev/null || true
 
     if ! safety::verify-protected-paths "$SAFETY_SNAPSHOT" "initial clone checkout"; then
         log::fatal "Protected paths lost during clone -- restoring from backup"
