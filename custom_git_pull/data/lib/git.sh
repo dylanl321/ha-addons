@@ -5,6 +5,19 @@
 
 SAFETY_SNAPSHOT="/tmp/.git_pull_protected_snapshot"
 
+function git::remove-git-locks {
+    [ -d /config/.git ] || return 0
+    rm -f /config/.git/index.lock /config/.git/*.lock 2>/dev/null || true
+}
+
+function git::remove-git-dir {
+    git::remove-git-locks
+    rm -rf /config/.git 2>/dev/null || true
+    if [ -d /config/.git ]; then
+        log::warning "Could not fully remove /config/.git (e.g. lock held); continuing"
+    fi
+}
+
 function git::clone {
     local backup_location
     backup_location=$(backup::create "pre-clone")
@@ -31,7 +44,7 @@ function git::clone {
     log::info "Adding remote ${GIT_REMOTE} -> ${REPOSITORY}"
     if ! git remote add "$GIT_REMOTE" "$REPOSITORY"; then
         log::error "git remote add failed -- restoring from backup"
-        rm -rf /config/.git
+        git::remove-git-dir
         backup::restore "$backup_location"
         bashio::exit.nok "git remote add failed"
     fi
@@ -39,7 +52,7 @@ function git::clone {
     log::info "Fetching from ${GIT_REMOTE}..."
     if ! git fetch "$GIT_REMOTE"; then
         log::error "git fetch failed -- restoring from backup"
-        rm -rf /config/.git
+        git::remove-git-dir
         backup::restore "$backup_location"
         bashio::exit.nok "git fetch failed, /config has been restored from backup"
     fi
@@ -52,7 +65,7 @@ function git::clone {
         log::error "Branch '${target_branch}' does not exist on remote '${GIT_REMOTE}'"
         log::error "Available remote branches: ${available_branches}"
         log::error "Update the git_branch setting in the addon configuration to match your repo"
-        rm -rf /config/.git
+        git::remove-git-dir
         backup::restore "$backup_location"
         bashio::exit.nok "Branch '${target_branch}' not found. Available: ${available_branches}"
     fi
@@ -61,19 +74,20 @@ function git::clone {
     git::backup-conflicting-files "${GIT_REMOTE}/${target_branch}" "$backup_location"
 
     log::info "Checking out branch ${target_branch}..."
+    git::remove-git-locks
     # Use checkout --orphan + reset --hard instead of checkout -f.
     # checkout -f from an empty branch wipes untracked files; reset --hard
     # only touches files tracked by the target commit.
     if ! git checkout --orphan "$target_branch"; then
         log::error "git checkout --orphan failed -- restoring from backup"
-        rm -rf /config/.git
+        git::remove-git-dir
         backup::restore "$backup_location"
         bashio::exit.nok "git checkout --orphan failed, /config has been restored from backup"
     fi
 
     if ! git reset --hard "${GIT_REMOTE}/${target_branch}"; then
         log::error "git reset --hard failed -- restoring from backup"
-        rm -rf /config/.git
+        git::remove-git-dir
         backup::restore "$backup_location"
         bashio::exit.nok "git reset failed, /config has been restored from backup"
     fi
@@ -82,7 +96,7 @@ function git::clone {
 
     if ! safety::verify-protected-paths "$SAFETY_SNAPSHOT" "initial clone checkout"; then
         log::fatal "Protected paths lost during clone -- restoring from backup"
-        rm -rf /config/.git
+        git::remove-git-dir
         backup::restore "$backup_location"
         bashio::exit.nok "Clone aborted -- protected HA state was destroyed"
     fi
