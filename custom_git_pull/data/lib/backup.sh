@@ -16,12 +16,10 @@ function backup::create {
 
     log::info "Backing up /config to ${backup_location} (excluding protected paths)..."
 
-    local rsync_args
-    rsync_args=$(git::build-rsync-excludes)
+    git::build-rsync-excludes
 
-    # shellcheck disable=SC2086
     if ! rsync -a --safe-links --no-owner --no-group \
-        $rsync_args \
+        "${RSYNC_EXCLUDE_ARGS[@]}" \
         /config/ "${backup_location}/" 2>/dev/null; then
         log::error "Backup rsync failed"
         rm -rf "${backup_location}"
@@ -45,12 +43,10 @@ function backup::restore {
 
     log::warning "Restoring /config from backup: ${backup_location}"
 
-    local rsync_args
-    rsync_args=$(git::build-rsync-excludes)
+    git::build-rsync-excludes
 
-    # shellcheck disable=SC2086
     if ! rsync -a --delete --safe-links --no-owner --no-group \
-        $rsync_args \
+        "${RSYNC_EXCLUDE_ARGS[@]}" \
         "${backup_location}/" /config/ 2>/dev/null; then
         log::error "Restore rsync failed"
         return 1

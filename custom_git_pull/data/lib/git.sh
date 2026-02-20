@@ -14,6 +14,8 @@ RSYNC_EXCLUDES=(
     "home-assistant_v2.db-shm"
     ".cloud/"
     "backups/"
+    "media/"
+    "ssl/"
     "tts/"
     "deps/"
     ".git/"
@@ -23,21 +25,38 @@ RSYNC_EXCLUDES=(
     ".git_pull.log.*"
 )
 
+RSYNC_USER_DIR_EXCLUDES=(
+    "www/"
+    "python_scripts/"
+)
+
 PREFLIGHT_PATTERNS='^(\.storage/|secrets\.yaml$|home-assistant_v2\.db(-wal|-shm)?$|\.cloud/)'
 
+RSYNC_EXCLUDE_ARGS=()
+
 function git::build-rsync-excludes {
-    local args=""
+    RSYNC_EXCLUDE_ARGS=()
     for ex in "${RSYNC_EXCLUDES[@]}"; do
-        args="${args} --exclude=${ex}"
+        RSYNC_EXCLUDE_ARGS+=("--exclude=${ex}")
     done
-    echo "$args"
+    if [ "${MIRROR_PROTECT_USER_DIRS:-true}" == "true" ]; then
+        for ex in "${RSYNC_USER_DIR_EXCLUDES[@]}"; do
+            RSYNC_EXCLUDE_ARGS+=("--exclude=${ex}")
+        done
+    fi
 }
 
 function git::preflight {
     cd "$STAGING_DIR" || return 1
 
+    local tree_output
+    if ! tree_output=$(git ls-tree -r --name-only HEAD 2>&1); then
+        log::fatal "PREFLIGHT FAILED: cannot read HEAD tree: ${tree_output}"
+        return 1
+    fi
+
     local violations
-    violations=$(git ls-tree -r --name-only HEAD 2>/dev/null | grep -E "$PREFLIGHT_PATTERNS" || true)
+    violations=$(echo "$tree_output" | grep -E "$PREFLIGHT_PATTERNS" || true)
 
     if [ -n "$violations" ]; then
         log::fatal "PREFLIGHT FAILED: repository tracks protected HA paths:"
@@ -53,7 +72,50 @@ function git::preflight {
     return 0
 }
 
+function git::dry-run-report {
+    log::info "=== DRY RUN: previewing deploy from staging repo to /config ==="
+
+    git::build-rsync-excludes
+
+    local -a rsync_cmd=(rsync -a --dry-run --itemize-changes
+        --safe-links --no-owner --no-group
+        --delete-after
+        "${RSYNC_EXCLUDE_ARGS[@]}"
+        "${STAGING_DIR}/" /config/)
+
+    local rsync_output
+    rsync_output=$("${rsync_cmd[@]}" 2>&1) || true
+
+    if [ -z "$rsync_output" ]; then
+        log::info "DRY RUN: no changes detected between staging repo and /config"
+        return 0
+    fi
+
+    local adds=0 deletes=0 updates=0
+    while IFS= read -r line; do
+        case "$line" in
+            \*deleting*) (( deletes++ )) || true ;;
+            \>f+++++++*) (( adds++ )) || true ;;
+            \>f*)        (( updates++ )) || true ;;
+        esac
+    done <<< "$rsync_output"
+
+    log::info "DRY RUN: ${adds} file(s) to add, ${updates} to update, ${deletes} to delete"
+    log::info "DRY RUN: full itemized list follows:"
+    while IFS= read -r line; do
+        log::info "  ${line}"
+    done <<< "$rsync_output"
+
+    log::info "=== DRY RUN complete. No changes were made to /config. ==="
+    return 0
+}
+
 function git::deploy {
+    if [ "${DEPLOY_DRY_RUN:-false}" == "true" ]; then
+        git::dry-run-report
+        return 0
+    fi
+
     log::info "Creating pre-deploy backup..."
     local backup_location
     backup_location=$(backup::create "pre-deploy")
@@ -61,34 +123,44 @@ function git::deploy {
         log::error "Pre-deploy backup failed, aborting deploy"
         return 1
     fi
+    DEPLOY_BACKUP="$backup_location"
+
+    git::build-rsync-excludes
+
+    local -a rsync_cmd=(rsync -a --safe-links --no-owner --no-group
+        --delay-updates --itemize-changes
+        "${RSYNC_EXCLUDE_ARGS[@]}")
+
+    if [ "${DEPLOY_DELETE:-false}" == "true" ]; then
+        log::warning "deploy_delete is enabled -- files not in the repo will be removed from /config"
+        rsync_cmd+=(--delete-after)
+    fi
+
+    rsync_cmd+=("${STAGING_DIR}/" /config/)
 
     log::info "Deploying from staging repo to /config via rsync..."
 
-    local rsync_args
-    rsync_args=$(git::build-rsync-excludes)
+    DEPLOY_IN_PROGRESS=1
 
     local rsync_output
-    # Phase 1: add and update files (no --delete)
-    # shellcheck disable=SC2086
-    if ! rsync_output=$(rsync -a --safe-links --no-owner --no-group \
-        --delay-updates --itemize-changes \
-        $rsync_args \
-        "${STAGING_DIR}/" /config/ 2>&1); then
+    if ! rsync_output=$("${rsync_cmd[@]}" 2>&1); then
         log::error "rsync deploy failed: ${rsync_output}"
         log::warning "Restoring /config from pre-deploy backup..."
         backup::restore "$backup_location"
+        DEPLOY_IN_PROGRESS=""
         return 1
     fi
+
+    DEPLOY_IN_PROGRESS=""
 
     if [ -n "$rsync_output" ]; then
         local change_count
         change_count=$(echo "$rsync_output" | wc -l)
-        log::info "Phase 1: deployed ${change_count} file change(s) to /config"
+        log::info "Deployed ${change_count} file change(s) to /config"
     else
-        log::info "Phase 1: no file changes to deploy"
+        log::info "No file changes to deploy"
     fi
 
-    DEPLOY_BACKUP="$backup_location"
     return 0
 }
 
@@ -118,9 +190,12 @@ function git::clone {
         return 1
     fi
 
+    OLD_COMMIT=""
     if ! git::deploy; then
         return 1
     fi
+    NEW_COMMIT=$(cd "$STAGING_DIR" && git rev-parse HEAD)
+    log::info "Initial clone deployed at commit: ${NEW_COMMIT}"
 
     return 0
 }

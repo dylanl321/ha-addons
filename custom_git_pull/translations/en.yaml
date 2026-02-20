@@ -30,6 +30,32 @@ configuration:
       If enabled, the app will clean-up branches that are deleted on the
       remote repository, but still have cached entries on the local machine.
       Leave this as `false` if you are unsure.
+  deploy_delete:
+    name: Deploy Delete
+    description: >-
+      If enabled, files in /config that are not present in the repository will
+      be removed during deploy (mirror semantics). Protected paths (.storage,
+      secrets.yaml, databases, etc.) are always excluded. Leave this as `false`
+      if you are unsure -- the default is additive-only.
+  deploy_dry_run:
+    name: Deploy Dry Run
+    description: >-
+      If enabled, the addon will report what files would be added, changed, or
+      deleted by a deploy without actually modifying /config. Useful for
+      previewing deploy_delete behavior before enabling it. The addon exits
+      after the report.
+  mirror_protect_user_dirs:
+    name: Mirror Protect User Dirs
+    description: >-
+      When enabled (default), the directories www/ and python_scripts/ are
+      excluded from deploy and will not be deleted in mirror mode. Disable this
+      only if you manage these directories entirely via git.
+  allow_legacy_config_git_dir:
+    name: Allow Legacy Config Git Dir
+    description: >-
+      If /config/.git exists (from an older addon version), the addon will
+      block mirror-mode deploys by default. Enable this to allow mirror-mode
+      deploys even when /config/.git is present.
   deployment_key:
     name: Deployment Key
     description: >-

@@ -24,6 +24,10 @@ options:
     - .gitignore
   git_command: pull
   git_prune: false
+  deploy_delete: false
+  deploy_dry_run: false
+  mirror_protect_user_dirs: true
+  allow_legacy_config_git_dir: false
   deployment_key: []
   deployment_user: ""
   deployment_password: ""
@@ -40,6 +44,10 @@ schema:
     - str
   git_command: list(pull|reset)
   git_prune: bool
+  deploy_delete: bool
+  deploy_dry_run: bool
+  mirror_protect_user_dirs: bool
+  allow_legacy_config_git_dir: bool
   deployment_key:
     - str
   deployment_user: str

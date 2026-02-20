@@ -22,6 +22,11 @@ function utils::release-lock {
 }
 
 function utils::cleanup-on-exit {
+    if [ "${DEPLOY_IN_PROGRESS:-}" == "1" ] && [ -n "${DEPLOY_BACKUP:-}" ] && [ -d "${DEPLOY_BACKUP:-}" ]; then
+        log::warning "Deploy was interrupted -- restoring /config from pre-deploy backup"
+        backup::restore "$DEPLOY_BACKUP" || log::error "Interrupted-deploy restore failed"
+        DEPLOY_IN_PROGRESS=""
+    fi
     utils::release-lock
     log::info "=== Git Pull session ended (PID $$) ==="
 }
