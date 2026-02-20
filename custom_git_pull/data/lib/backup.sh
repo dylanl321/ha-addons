@@ -2,7 +2,6 @@
 # vim: ft=bash
 # shellcheck shell=bash
 # Backup and restore for git-tracked files only.
-# HA runtime state (.storage, databases, secrets, etc.) is never touched.
 
 BACKUP_DIR="/config/.git_pull_backups"
 MAX_BACKUPS=3
@@ -17,14 +16,13 @@ function backup::create {
     cd /config || { log::error "Cannot cd into /config"; return 1; }
 
     if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-        log::info "No git repo yet -- skipping tracked-file backup (nothing to roll back)"
+        log::info "No git repo yet -- skipping tracked-file backup"
         echo "${backup_location}"
         return 0
     fi
 
     log::info "Backing up git-tracked files to ${backup_location}"
 
-    # Back up only files git knows about (tracked + staged)
     local file_list
     file_list=$(git ls-files 2>/dev/null)
 
@@ -42,7 +40,6 @@ function backup::create {
         cp -a "$file" "${backup_location}/${file}" || log::warning "Failed to copy ${file}"
     done <<< "$file_list"
 
-    # Also back up the .git directory state (HEAD, refs) so we can restore branch position
     if [ -f /config/.git/HEAD ]; then
         mkdir -p "${backup_location}/.git-state"
         cp /config/.git/HEAD "${backup_location}/.git-state/HEAD" 2>/dev/null
@@ -68,7 +65,6 @@ function backup::restore {
 
     cd /config || { log::error "Cannot cd into /config"; return 1; }
 
-    # If we have the original commit SHA, reset git to that state first
     if [ -f "${backup_location}/.git-state/commit-sha" ] && git rev-parse --is-inside-work-tree &>/dev/null; then
         local old_sha
         old_sha=$(cat "${backup_location}/.git-state/commit-sha")
@@ -78,7 +74,6 @@ function backup::restore {
         fi
     fi
 
-    # Overwrite only the files that were backed up (git-tracked files)
     local restored=0
     while IFS= read -r file; do
         [ -f "${backup_location}/${file}" ] || continue
@@ -90,58 +85,9 @@ function backup::restore {
         else
             log::warning "Failed to restore ${file}"
         fi
-    done < <(cd "${backup_location}" && find . -type f -not -path './.git-state/*' -not -path './.protected-paths/*' | sed 's|^\./||')
+    done < <(cd "${backup_location}" && find . -type f -not -path './.git-state/*' | sed 's|^\./||')
 
-    if [ -d "${backup_location}/.protected-paths" ]; then
-        log::info "Restoring protected HA paths from backup..."
-        for path in .storage secrets.yaml home-assistant_v2.db .cloud; do
-            if [ -e "${backup_location}/.protected-paths/${path}" ]; then
-                rm -rf "/config/${path}" 2>/dev/null
-                if cp -a "${backup_location}/.protected-paths/${path}" "/config/${path}"; then
-                    log::info "  Restored ${path}"
-                else
-                    log::warning "  Failed to restore ${path}"
-                fi
-            fi
-        done
-    fi
-
-    log::info "Restored ${restored} files from backup"
-    return 0
-}
-
-function backup::save-protected-paths {
-    local backup_location="$1"
-    [ -z "$backup_location" ] || [ ! -d "$backup_location" ] && return 1
-
-    cd /config || return 1
-    local dest="${backup_location}/.protected-paths"
-    mkdir -p "$dest" || return 1
-
-    for path in .storage secrets.yaml home-assistant_v2.db .cloud; do
-        if [ -e "$path" ]; then
-            rm -rf "${dest}/${path}" 2>/dev/null
-            cp -a "$path" "${dest}/${path}" 2>/dev/null || log::warning "Failed to back up protected path: ${path}"
-        fi
-    done
-    return 0
-}
-
-function backup::restore-protected-paths-only {
-    local backup_location="$1"
-    [ -z "$backup_location" ] || [ ! -d "$backup_location" ] || [ ! -d "${backup_location}/.protected-paths" ] && return 0
-
-    log::info "Re-applying protected HA paths from pre-clone backup (ensure repo did not overwrite)"
-    for path in .storage secrets.yaml home-assistant_v2.db .cloud; do
-        if [ -e "${backup_location}/.protected-paths/${path}" ]; then
-            rm -rf "/config/${path}" 2>/dev/null
-            if cp -a "${backup_location}/.protected-paths/${path}" "/config/${path}"; then
-                log::info "  Restored ${path}"
-            else
-                log::warning "  Failed to restore ${path}"
-            fi
-        fi
-    done
+    log::info "Restored ${restored} tracked files from backup"
     return 0
 }
 
