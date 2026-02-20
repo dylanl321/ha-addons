@@ -45,6 +45,7 @@ trap utils::cleanup-on-exit EXIT
 
 # Mark /config as safe for git (bind mount ownership differs from container user)
 git config --global --add safe.directory /config
+git config --global pull.rebase false
 
 cd /config || bashio::exit.nok "Failed to cd into /config"
 
