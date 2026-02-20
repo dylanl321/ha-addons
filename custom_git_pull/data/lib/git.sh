@@ -1,153 +1,176 @@
 #!/usr/bin/env bash
 # vim: ft=bash
 # shellcheck shell=bash
-# Git operations -- clone, synchronize, and config validation with rollback
+# Git operations in staging directory + rsync deploy to /config.
+# Git never runs inside /config. HA runtime state is never touched.
 
-function git::remove-git-locks {
-    [ -d /config/.git ] || return 0
-    rm -f /config/.git/index.lock /config/.git/*.lock 2>/dev/null || true
+STAGING_DIR="/config/.git_sync_repo"
+
+RSYNC_EXCLUDES=(
+    ".storage/"
+    "secrets.yaml"
+    "home-assistant_v2.db"
+    "home-assistant_v2.db-wal"
+    "home-assistant_v2.db-shm"
+    ".cloud/"
+    "backups/"
+    "tts/"
+    "deps/"
+    ".git/"
+    ".git_sync_repo/"
+    ".git_pull_backups/"
+    ".git_pull.log"
+    ".git_pull.log.*"
+)
+
+PREFLIGHT_PATTERNS='^(\.storage/|secrets\.yaml$|home-assistant_v2\.db(-wal|-shm)?$|\.cloud/)'
+
+function git::build-rsync-excludes {
+    local args=""
+    for ex in "${RSYNC_EXCLUDES[@]}"; do
+        args="${args} --exclude=${ex}"
+    done
+    echo "$args"
 }
 
-function git::remove-git-dir {
-    git::remove-git-locks
-    rm -rf /config/.git 2>/dev/null || true
+function git::preflight {
+    cd "$STAGING_DIR" || return 1
+
+    local violations
+    violations=$(git ls-tree -r --name-only HEAD 2>/dev/null | grep -E "$PREFLIGHT_PATTERNS" || true)
+
+    if [ -n "$violations" ]; then
+        log::fatal "PREFLIGHT FAILED: repository tracks protected HA paths:"
+        while IFS= read -r f; do
+            log::fatal "  - ${f}"
+        done <<< "$violations"
+        log::fatal "Remove these files from your repository and add them to .gitignore."
+        log::fatal "The addon will not deploy until this is fixed."
+        return 1
+    fi
+
+    log::info "Preflight check passed (no protected paths in HEAD tree)"
+    return 0
+}
+
+function git::deploy {
+    log::info "Creating pre-deploy backup..."
+    local backup_location
+    backup_location=$(backup::create "pre-deploy")
+    if [ $? -ne 0 ] || [ -z "$backup_location" ]; then
+        log::error "Pre-deploy backup failed, aborting deploy"
+        return 1
+    fi
+
+    log::info "Deploying from staging repo to /config via rsync..."
+
+    local rsync_args
+    rsync_args=$(git::build-rsync-excludes)
+
+    local rsync_output
+    # Phase 1: add and update files (no --delete)
+    # shellcheck disable=SC2086
+    if ! rsync_output=$(rsync -a --safe-links --no-owner --no-group \
+        --delay-updates --itemize-changes \
+        $rsync_args \
+        "${STAGING_DIR}/" /config/ 2>&1); then
+        log::error "rsync deploy failed: ${rsync_output}"
+        log::warning "Restoring /config from pre-deploy backup..."
+        backup::restore "$backup_location"
+        return 1
+    fi
+
+    if [ -n "$rsync_output" ]; then
+        local change_count
+        change_count=$(echo "$rsync_output" | wc -l)
+        log::info "Phase 1: deployed ${change_count} file change(s) to /config"
+    else
+        log::info "Phase 1: no file changes to deploy"
+    fi
+
+    DEPLOY_BACKUP="$backup_location"
+    return 0
 }
 
 function git::clone {
-    local backup_location
-    backup_location=$(backup::create "pre-clone")
-    if [ $? -ne 0 ] || [ -z "$backup_location" ]; then
-        log::fatal "Cannot proceed with clone: backup failed"
-        bashio::exit.nok "Clone aborted -- backup failed"
+    if [ -d "$STAGING_DIR/.git" ]; then
+        log::info "Removing existing staging repo for clean clone"
+        rm -rf "$STAGING_DIR"
     fi
 
-    log::info "Moving protected HA paths out of /config..."
-    safety::move-out
-
-    cd /config || bashio::exit.nok "Cannot cd into /config"
-
-    if [ -d /config/.git ]; then
-        git::remove-git-dir
-    fi
-
-    log::info "Initializing git repository in /config..."
-
-    if ! git init; then
-        log::error "git init failed"
-        safety::move-back
-        bashio::exit.nok "git init failed"
-    fi
-
-    safety::ensure-gitignore-entries
-
-    log::info "Adding remote ${GIT_REMOTE} -> ${REPOSITORY}"
-    if ! git remote add "$GIT_REMOTE" "$REPOSITORY"; then
-        log::error "git remote add failed"
-        git::remove-git-dir
-        safety::move-back
-        bashio::exit.nok "git remote add failed"
-    fi
-
-    log::info "Fetching from ${GIT_REMOTE}..."
-    if ! git fetch "$GIT_REMOTE"; then
-        log::error "git fetch failed"
-        git::remove-git-dir
-        safety::move-back
-        bashio::exit.nok "git fetch failed"
-    fi
+    mkdir -p "$STAGING_DIR" || {
+        log::error "Cannot create staging directory ${STAGING_DIR}"
+        return 1
+    }
 
     local target_branch="${GIT_BRANCH:-main}"
 
-    if ! git rev-parse --verify "${GIT_REMOTE}/${target_branch}" &>/dev/null; then
-        local available_branches
-        available_branches=$(git branch -r | sed 's/^[[:space:]]*//' | tr '\n' ', ')
-        log::error "Branch '${target_branch}' not found. Available: ${available_branches}"
-        git::remove-git-dir
-        safety::move-back
-        bashio::exit.nok "Branch '${target_branch}' not found"
+    log::info "Cloning ${REPOSITORY} (branch: ${target_branch}) into staging directory..."
+    if ! git clone --branch "$target_branch" --single-branch "$REPOSITORY" "$STAGING_DIR"; then
+        log::error "git clone failed"
+        rm -rf "$STAGING_DIR"
+        return 1
     fi
 
-    log::info "Checking out branch ${target_branch}..."
-    git::remove-git-locks
+    log::info "Clone complete"
 
-    if ! git checkout --orphan "$target_branch"; then
-        log::error "git checkout --orphan failed"
-        git::remove-git-dir
-        safety::move-back
-        bashio::exit.nok "git checkout --orphan failed"
+    if ! git::preflight; then
+        return 1
     fi
 
-    if ! git reset --hard "${GIT_REMOTE}/${target_branch}"; then
-        log::error "git reset --hard failed"
-        git::remove-git-dir
-        safety::move-back
-        bashio::exit.nok "git reset --hard failed"
+    if ! git::deploy; then
+        return 1
     fi
 
-    git branch --set-upstream-to="${GIT_REMOTE}/${target_branch}" "$target_branch" &>/dev/null || true
-
-    log::info "Moving protected HA paths back into /config..."
-    safety::move-back
-    safety::ensure-gitignore-entries
-    log::info "Git clone complete"
+    return 0
 }
 
 function git::synchronize {
-    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-        log::warning "No git repository in /config -- performing initial clone"
+    if [ ! -d "$STAGING_DIR/.git" ]; then
+        log::warning "No staging repo found -- performing initial clone"
         git::clone
         return
     fi
 
-    log::info "Local git repository exists"
+    cd "$STAGING_DIR" || {
+        log::error "Cannot cd into staging directory"
+        return 1
+    }
 
     local current_remote
-    current_remote=$(git remote get-url --all "$GIT_REMOTE" | head -n 1)
+    current_remote=$(git remote get-url --all "$GIT_REMOTE" 2>/dev/null | head -n 1)
     if [ "$current_remote" != "$REPOSITORY" ]; then
-        log::fatal "Git origin '${current_remote}' does not match configured repository '${REPOSITORY}'"
-        bashio::exit.nok "Remote mismatch -- fix addon configuration"
+        log::fatal "Staging repo remote '${current_remote}' does not match configured '${REPOSITORY}'"
+        log::info "Removing stale staging repo and re-cloning..."
+        rm -rf "$STAGING_DIR"
+        git::clone
         return
     fi
 
-    log::info "Git origin is correctly set to ${REPOSITORY}"
+    log::info "Staging repo remote matches: ${REPOSITORY}"
     OLD_COMMIT=$(git rev-parse HEAD)
-
-    local backup_location
-    backup_location=$(backup::create "pre-sync")
-    if [ $? -ne 0 ] || [ -z "$backup_location" ]; then
-        log::error "Backup failed, aborting sync to protect /config"
-        return 1
-    fi
-
-    log::info "Moving protected HA paths out of /config..."
-    safety::move-out
 
     log::info "Starting git fetch..."
     if ! git fetch "$GIT_REMOTE" "$GIT_BRANCH"; then
-        log::error "Git fetch failed"
-        safety::move-back
+        log::error "Git fetch failed -- /config is untouched"
         return 1
     fi
 
     if [ "$GIT_PRUNE" == "true" ]; then
         log::info "Starting git prune..."
-        git prune || log::warning "Git prune failed, continuing anyway"
+        git remote prune "$GIT_REMOTE" || log::warning "Git prune failed, continuing anyway"
     fi
 
     GIT_CURRENT_BRANCH=$(git rev-parse --symbolic-full-name --abbrev-ref HEAD)
-    if [ -z "$GIT_BRANCH" ] || [ "$GIT_BRANCH" == "$GIT_CURRENT_BRANCH" ]; then
-        log::info "Staying on branch: ${GIT_CURRENT_BRANCH}"
-    else
+    if [ -n "$GIT_BRANCH" ] && [ "$GIT_BRANCH" != "$GIT_CURRENT_BRANCH" ]; then
         log::info "Switching to branch ${GIT_BRANCH}..."
         if ! git checkout "$GIT_BRANCH"; then
-            log::error "Git checkout failed -- restoring from backup"
-            git merge --abort &>/dev/null || true
-            git checkout --force "$GIT_CURRENT_BRANCH" &>/dev/null || true
-            safety::move-back
-            backup::restore "$backup_location"
+            log::error "Git checkout of branch ${GIT_BRANCH} failed -- /config is untouched"
             return 1
         fi
         GIT_CURRENT_BRANCH=$(git rev-parse --symbolic-full-name --abbrev-ref HEAD)
+    else
+        log::info "Staying on branch: ${GIT_CURRENT_BRANCH}"
     fi
 
     local git_op_failed=false
@@ -156,7 +179,6 @@ function git::synchronize {
             log::info "Starting git pull..."
             if ! git pull --no-rebase; then
                 log::warning "Git pull failed, attempting to resolve..."
-
                 git merge --abort &>/dev/null || true
                 git reset --hard HEAD &>/dev/null || true
 
@@ -191,69 +213,45 @@ function git::synchronize {
             ;;
     esac
 
-    log::info "Moving protected HA paths back into /config..."
-    safety::move-back
-
     if [ "$git_op_failed" = true ]; then
-        log::error "Git operation failed -- restoring tracked files from backup"
-        backup::restore "$backup_location"
+        log::error "Git operation failed in staging repo -- /config is untouched"
         return 1
     fi
 
-    log::info "Git synchronize complete"
-    backup::cleanup
-}
-
-function git::validate-config {
-    log::info "Checking if anything changed..."
-
-    if [ -z "${OLD_COMMIT:-}" ]; then
-        log::info "Initial clone detected, skipping change comparison"
-        log::info "Validating Home Assistant configuration..."
-        if ! bashio::core.check; then
-            log::error "Configuration check FAILED after initial clone"
-            log::error "Fix your repository configuration before restarting HA"
-            return 1
-        fi
-        log::info "Configuration check passed"
-        return 0
+    if ! git::preflight; then
+        return 1
     fi
 
     NEW_COMMIT=$(git rev-parse HEAD)
     if [ "$NEW_COMMIT" == "$OLD_COMMIT" ]; then
-        log::info "Nothing has changed."
-        return
+        log::info "No new commits. Nothing to deploy."
+        return 0
     fi
 
     log::info "New commit: ${NEW_COMMIT} (was: ${OLD_COMMIT})"
+
+    if ! git::deploy; then
+        return 1
+    fi
+
+    log::info "Synchronize complete"
+    backup::cleanup
+    return 0
+}
+
+function git::validate-config {
     log::info "Validating Home Assistant configuration..."
 
     if ! bashio::core.check; then
-        log::error "Configuration check FAILED after pulling new changes"
+        log::error "Configuration check FAILED after deploy"
 
-        log::warning "Reverting to previous commit ${OLD_COMMIT} to protect Home Assistant"
-        local revert_diff
-        revert_diff=$(git diff --stat HEAD "$OLD_COMMIT" 2>/dev/null)
-        if [ -n "$revert_diff" ]; then
-            log::info "Files being reverted:"
-            while IFS= read -r line; do
-                log::info "  ${line}"
-            done <<< "$revert_diff"
+        if [ -n "${DEPLOY_BACKUP:-}" ] && [ -d "${DEPLOY_BACKUP:-}" ]; then
+            log::warning "Rolling back /config to pre-deploy state..."
+            backup::restore "$DEPLOY_BACKUP"
+            log::info "Rollback complete. /config restored to pre-deploy state."
         fi
 
-        if git reset --hard "$OLD_COMMIT"; then
-            log::info "Successfully reverted to ${OLD_COMMIT}"
-
-            if bashio::core.check; then
-                log::info "Reverted configuration passes validation"
-            else
-                log::error "Even the reverted configuration fails validation -- leaving as-is"
-            fi
-        else
-            log::error "Failed to revert to ${OLD_COMMIT} -- config may be in a bad state"
-        fi
-
-        log::error "Do NOT restart until the upstream repo is fixed and a new sync succeeds"
+        log::error "Fix your repository configuration before running again"
         return 1
     fi
 
@@ -261,19 +259,23 @@ function git::validate-config {
 
     if [ "$AUTO_RESTART" != "true" ]; then
         log::info "Local configuration has changed. Manual restart required."
-        return
+        return 0
+    fi
+
+    if [ -z "${OLD_COMMIT:-}" ] || [ -z "${NEW_COMMIT:-}" ] || [ "$OLD_COMMIT" == "$NEW_COMMIT" ]; then
+        return 0
     fi
 
     local do_restart="false"
     local changed_files
-    changed_files=$(git diff "$OLD_COMMIT" "$NEW_COMMIT" --name-only)
+    changed_files=$(cd "$STAGING_DIR" && git diff "$OLD_COMMIT" "$NEW_COMMIT" --name-only 2>/dev/null)
     log::info "Changed files: ${changed_files}"
 
     if [ -n "$RESTART_IGNORED_FILES" ]; then
         for changed_file in $changed_files; do
             local is_ignored=""
             for ignored in $RESTART_IGNORED_FILES; do
-                if [ -d "$ignored" ]; then
+                if [ -d "/config/$ignored" ]; then
                     case "$changed_file" in
                         "${ignored}"|"${ignored}"/*) is_ignored=1 ;;
                         *) is_ignored="" ;;

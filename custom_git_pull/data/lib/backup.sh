@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # vim: ft=bash
 # shellcheck shell=bash
-# Backup and restore for git-tracked files only.
+# Backup and restore for config files via rsync.
+# Uses the same exclude list as deploy so protected paths are never in backups.
 
 BACKUP_DIR="/config/.git_pull_backups"
 MAX_BACKUPS=3
@@ -11,39 +12,20 @@ function backup::create {
     local backup_location="${BACKUP_DIR}/config-${backup_label}-$(date +%Y-%m-%d_%H-%M-%S)"
 
     mkdir -p "${BACKUP_DIR}" || { log::error "Failed to create backup parent directory"; return 1; }
-    mkdir "${backup_location}" || { log::error "Failed to create backup directory ${backup_location}"; return 1; }
+    mkdir -p "${backup_location}" || { log::error "Failed to create backup directory"; return 1; }
 
-    cd /config || { log::error "Cannot cd into /config"; return 1; }
+    log::info "Backing up /config to ${backup_location} (excluding protected paths)..."
 
-    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-        log::info "No git repo yet -- skipping tracked-file backup"
-        echo "${backup_location}"
-        return 0
-    fi
+    local rsync_args
+    rsync_args=$(git::build-rsync-excludes)
 
-    log::info "Backing up git-tracked files to ${backup_location}"
-
-    local file_list
-    file_list=$(git ls-files 2>/dev/null)
-
-    if [ -z "$file_list" ]; then
-        log::info "No tracked files to back up"
-        echo "${backup_location}"
-        return 0
-    fi
-
-    while IFS= read -r file; do
-        [ -f "$file" ] || continue
-        local dir
-        dir=$(dirname "$file")
-        mkdir -p "${backup_location}/${dir}" 2>/dev/null
-        cp -a "$file" "${backup_location}/${file}" || log::warning "Failed to copy ${file}"
-    done <<< "$file_list"
-
-    if [ -f /config/.git/HEAD ]; then
-        mkdir -p "${backup_location}/.git-state"
-        cp /config/.git/HEAD "${backup_location}/.git-state/HEAD" 2>/dev/null
-        git rev-parse HEAD > "${backup_location}/.git-state/commit-sha" 2>/dev/null
+    # shellcheck disable=SC2086
+    if ! rsync -a --safe-links --no-owner --no-group \
+        $rsync_args \
+        /config/ "${backup_location}/" 2>/dev/null; then
+        log::error "Backup rsync failed"
+        rm -rf "${backup_location}"
+        return 1
     fi
 
     local backup_size
@@ -61,33 +43,20 @@ function backup::restore {
         return 1
     fi
 
-    log::warning "Restoring git-tracked files from backup: ${backup_location}"
+    log::warning "Restoring /config from backup: ${backup_location}"
 
-    cd /config || { log::error "Cannot cd into /config"; return 1; }
+    local rsync_args
+    rsync_args=$(git::build-rsync-excludes)
 
-    if [ -f "${backup_location}/.git-state/commit-sha" ] && git rev-parse --is-inside-work-tree &>/dev/null; then
-        local old_sha
-        old_sha=$(cat "${backup_location}/.git-state/commit-sha")
-        if [ -n "$old_sha" ] && git rev-parse --verify "$old_sha" &>/dev/null; then
-            log::info "Resetting git to pre-sync commit ${old_sha}"
-            git reset --hard "$old_sha" &>/dev/null || log::warning "git reset to ${old_sha} failed"
-        fi
+    # shellcheck disable=SC2086
+    if ! rsync -a --delete --safe-links --no-owner --no-group \
+        $rsync_args \
+        "${backup_location}/" /config/ 2>/dev/null; then
+        log::error "Restore rsync failed"
+        return 1
     fi
 
-    local restored=0
-    while IFS= read -r file; do
-        [ -f "${backup_location}/${file}" ] || continue
-        local dir
-        dir=$(dirname "$file")
-        mkdir -p "/config/${dir}" 2>/dev/null
-        if cp -a "${backup_location}/${file}" "/config/${file}"; then
-            restored=$((restored + 1))
-        else
-            log::warning "Failed to restore ${file}"
-        fi
-    done < <(cd "${backup_location}" && find . -type f -not -path './.git-state/*' | sed 's|^\./||')
-
-    log::info "Restored ${restored} tracked files from backup"
+    log::info "Restore from backup complete"
     return 0
 }
 

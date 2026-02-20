@@ -1,28 +1,24 @@
 #!/usr/bin/env bash
 # vim: ft=bash
 # shellcheck shell=bash
-# Utility functions -- lock file management, credential setup
+# Utility functions -- flock-based locking, credential setup
 
 LOCK_FILE="/tmp/git_pull.lock"
+LOCK_FD=9
 
 function utils::acquire-lock {
-    if [ -f "$LOCK_FILE" ]; then
-        local lock_pid
-        lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
-        if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
-            log::warning "Another instance is already running (PID: ${lock_pid}), skipping this cycle"
-            return 1
-        else
-            log::warning "Stale lock file found (PID: ${lock_pid} no longer running), removing it"
-            rm -f "$LOCK_FILE"
-        fi
+    exec 9>"$LOCK_FILE"
+    if ! flock -n $LOCK_FD; then
+        log::warning "Another instance is already running, skipping this cycle"
+        return 1
     fi
-    echo $$ > "$LOCK_FILE"
     return 0
 }
 
 function utils::release-lock {
-    rm -f "$LOCK_FILE"
+    flock -u $LOCK_FD 2>/dev/null || true
+    exec 9>&- 2>/dev/null || true
+    rm -f "$LOCK_FILE" 2>/dev/null || true
 }
 
 function utils::cleanup-on-exit {
@@ -35,12 +31,9 @@ function utils::setup-credentials {
         return 0
     fi
 
-    cd /config || return 1
-
     log::info "Setting up credential.helper for user: ${DEPLOYMENT_USER}"
     git config --system credential.helper 'store --file=/tmp/git-credentials'
 
-    # Extract hostname from repository URL
     local h="$REPOSITORY"
     local proto="${h%%://*}"
     h="${h#*://}"

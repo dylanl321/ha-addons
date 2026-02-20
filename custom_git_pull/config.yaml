@@ -1,5 +1,5 @@
 ---
-version: 2.0.18
+version: 3.0.0
 slug: custom_git_pull
 name: Custom Git Pull
 description: Custom git pull to update the local configuration

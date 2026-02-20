@@ -3,147 +3,119 @@
 ## How It Works
 
 This addon synchronizes your Home Assistant `/config` directory with a git
-repository. It runs inside a Docker container with `/config` mounted as a
-read-write bind mount.
+repository. Git never operates inside `/config`. Instead, all git operations
+happen in an isolated staging directory, and only your configuration files are
+deployed to `/config` via `rsync` with explicit excludes.
 
-### The Core Problem
-
-Home Assistant's `/config` directory contains two types of content:
-
-1. **Your configuration files** -- `configuration.yaml`, `automations.yaml`,
-   dashboards, packages, etc. These are what you commit to git.
-2. **HA runtime state** -- `.storage/` (entity and device registries, auth
-   tokens, area config, integrations), `secrets.yaml`, `home-assistant_v2.db`
-   (history/state database), and `.cloud/` (Nabu Casa). These are created and
-   managed by Home Assistant itself and must never be modified by git.
-
-Every git command that updates the working tree (`pull`, `reset --hard`,
-`checkout`) will overwrite any tracked file with the version from the
-repository. If your repository happens to contain `.storage/`, `secrets.yaml`,
-or any other HA runtime file, git will silently replace the live version with
-whatever is in the repo -- which can be stale, empty, or wrong. This causes
-Home Assistant to lose all of its state (users, integrations, entities, history)
-and show the initial onboarding screen on next restart.
-
-### The Solution: Move Out, Git, Move Back
-
-Before any git command runs, we **physically move** the protected HA paths out
-of `/config` into a temporary directory (`/tmp/.ha-protected/`). While they are
-not in `/config`, it is impossible for any git command to read, modify, or
-delete them. After git finishes -- whether it succeeded or failed -- we move
-them back.
+### Architecture
 
 ```
-BEFORE GIT
-  /config/.storage/          -->  /tmp/.ha-protected/.storage/
-  /config/secrets.yaml       -->  /tmp/.ha-protected/secrets.yaml
-  /config/home-assistant_v2.db --> /tmp/.ha-protected/home-assistant_v2.db
-  /config/.cloud/            -->  /tmp/.ha-protected/.cloud/
-
-GIT RUNS (clone, pull, reset -- whatever it needs to do)
-  These four paths do not exist in /config, so git cannot touch them.
-
-AFTER GIT
-  /tmp/.ha-protected/.storage/     -->  /config/.storage/
-  /tmp/.ha-protected/secrets.yaml  -->  /config/secrets.yaml
-  /tmp/.ha-protected/home-assistant_v2.db --> /config/home-assistant_v2.db
-  /tmp/.ha-protected/.cloud/       -->  /config/.cloud/
+/config/.git_sync_repo/     <-- git clone/pull/reset happen here (staging)
+        |
+        | rsync --exclude .storage/ --exclude secrets.yaml ...
+        v
+/config/                    <-- HA runtime state is never touched
 ```
 
-This happens on **every code path** -- success, failure, error recovery. The
-move-back runs before the addon exits from any git operation.
+1. **Clone/fetch/pull/reset** happen inside `/config/.git_sync_repo/`.
+2. A **preflight check** verifies the repository does not track any protected
+   HA paths (`.storage/`, `secrets.yaml`, `home-assistant_v2.db`, `.cloud/`).
+   If it does, the addon refuses to deploy and logs an error.
+3. **rsync** copies configuration files from the staging repo into `/config`,
+   excluding all protected paths. HA runtime state stays in place untouched.
+4. **Validation** runs `bashio::core.check` after deploy. If it fails, the
+   addon rolls back `/config` to the pre-deploy state from a backup.
 
-### Protected Paths
+### Why This is Safe
+
+- Git never runs inside `/config`. No git command can read, modify, or delete
+  anything in `/config`.
+- `rsync` with `--exclude` skips protected paths entirely. They are never read,
+  copied, moved, or overwritten.
+- No files are ever moved in or out of `/config`. HA runtime state stays in
+  place at all times.
+- A crash during git operations leaves `/config` untouched (git was operating
+  in the staging directory).
+- A crash during rsync leaves `/config` in a partially-updated state but
+  protected paths are never affected (they are excluded).
+- The preflight check blocks deployment if the repository tracks protected
+  paths, providing a second layer of defense.
+
+### Protected / Excluded Paths
+
+These paths are excluded from rsync deploy and backup/restore. They are never
+touched by the addon under any circumstances:
 
 | Path | What it contains |
 |------|-----------------|
 | `.storage/` | Entity registry, device registry, area registry, auth tokens, integration config, UI settings |
 | `secrets.yaml` | Passwords, API keys, tokens referenced by `!secret` in config |
 | `home-assistant_v2.db` | State history and long-term statistics database |
+| `home-assistant_v2.db-wal` | SQLite write-ahead log (companion to the database) |
+| `home-assistant_v2.db-shm` | SQLite shared memory (companion to the database) |
 | `.cloud/` | Nabu Casa / Home Assistant Cloud connection state |
+| `backups/` | Home Assistant backup archives |
+| `tts/` | Text-to-speech cache |
+| `deps/` | Python dependency cache |
+
+Additional addon-internal paths are also excluded:
+
+| Path | Purpose |
+|------|---------|
+| `.git_sync_repo/` | The staging git repository |
+| `.git_pull_backups/` | Pre-deploy backup snapshots |
+| `.git_pull.log` | Persistent addon log |
 
 ### Execution Flow
 
 #### Startup
 
-1. Container starts, loads addon configuration from Home Assistant.
-2. Sets `git config --global pull.rebase false` (use merge strategy).
-3. Sets up SSH key if configured (reads from addon config, reconstructs PEM
+1. Container starts, loads addon configuration.
+2. Sets `git config --global pull.rebase false` (merge strategy).
+3. Ensures `.gitignore` entries exist for addon-internal paths.
+4. Warns if `.storage/` is missing (HA may show onboarding).
+5. Sets up SSH key if configured (reads from addon config, reconstructs PEM
    format if needed, validates fingerprint).
-4. Tests SSH connectivity to the git remote.
 
 #### Sync Cycle
 
 Each sync cycle (runs once, or repeats on an interval):
 
-1. **Lock** -- Acquire a PID-based lock file to prevent overlapping runs.
-2. **Check for existing repo** -- If `/config` is not a git working tree, run
-   the initial clone flow. Otherwise run the sync flow.
+1. **Lock** -- Acquire an `flock`-based lock. Automatically released on process
+   death.
+2. **Check for staging repo** -- If `/config/.git_sync_repo` does not exist,
+   perform initial clone. Otherwise perform sync.
 
-#### Initial Clone (no existing git repo)
+#### Initial Clone
 
-1. Back up all currently git-tracked files (there are none on first clone, so
-   this is a no-op).
-2. **Move protected paths out** of `/config`.
-3. Remove any leftover `.git` directory from a previous failed attempt.
-4. `git init` -- create a fresh repository.
-5. Add `.git_pull_backups/` and log files to `.gitignore`.
-6. `git remote add` -- point to the configured repository.
-7. `git fetch` -- download all objects and refs.
-8. Verify the configured branch exists on the remote.
-9. `git checkout --orphan <branch>` -- create the branch without touching the
-   working tree.
-10. `git reset --hard <remote>/<branch>` -- update tracked files to match the
-    remote. Because protected paths are not in `/config`, they cannot be
-    overwritten even if the repo tracks them.
-11. Set upstream tracking.
-12. **Move protected paths back** into `/config`.
-13. Validate HA configuration via `bashio::core.check`.
+1. `git clone --branch <branch> --single-branch <repo> /config/.git_sync_repo`
+2. **Preflight**: verify HEAD tree does not contain protected paths.
+3. **Backup**: rsync snapshot of current `/config` (minus excludes).
+4. **Deploy**: rsync from staging to `/config` (minus excludes).
+5. **Validate**: run `bashio::core.check`. Rollback on failure.
 
-#### Regular Sync (existing git repo)
+#### Regular Sync
 
-1. Verify the remote URL matches the configured repository.
-2. Record the current commit SHA.
-3. Back up all git-tracked files to `/config/.git_pull_backups/` (for rollback).
-4. **Move protected paths out** of `/config`.
-5. `git fetch` -- download new objects.
-6. `git prune` if configured.
-7. Switch branches if the configured branch differs from the current one.
-8. Execute the configured git command:
-   - **pull**: `git pull --no-rebase`. If this fails (e.g. merge conflict),
-     abort the merge, reset tracked files to HEAD, and retry once.
-   - **reset**: Log `git diff --stat` showing what will be discarded, then
-     `git reset --hard <remote>/<branch>`.
-9. **Move protected paths back** into `/config` (runs on both success and
-   failure).
-10. If the git operation failed, restore tracked files from the pre-sync backup.
-11. Clean up old backups (keep the 3 most recent).
+1. Verify staging repo remote URL matches configuration.
+2. `git fetch` in staging repo.
+3. `git prune` if configured.
+4. Branch switch if needed.
+5. `git pull --no-rebase` or `git reset --hard` (depending on config).
+6. **Preflight**: verify HEAD tree does not contain protected paths.
+7. Compare old and new commit SHAs. If unchanged, skip deploy.
+8. **Backup**: rsync snapshot of current `/config` (minus excludes).
+9. **Deploy**: rsync from staging to `/config` (minus excludes).
+10. **Validate**: run `bashio::core.check`. Rollback on failure.
+11. If `auto_restart` enabled and relevant files changed, restart HA.
 
-#### Configuration Validation
+### Backup and Rollback
 
-After a successful sync:
-
-1. Compare old and new commit SHAs. If unchanged, stop.
-2. Run `bashio::core.check` to validate the HA configuration.
-3. If validation **fails**: revert to the previous commit with `git reset --hard`
-   and log the diff. Do not restart HA.
-4. If validation **passes** and `auto_restart` is enabled: check which files
-   changed. If all changed files are in the `restart_ignore` list, skip
-   restart. Otherwise, restart Home Assistant.
-
-### Backup System
-
-The backup system exists solely for **git-tracked files** (your config). It
-does not back up or restore protected HA state -- that is handled entirely by
-the move-out/move-back mechanism.
-
-- Backups are stored in `/config/.git_pull_backups/` (persistent across
-  container restarts).
-- Only files listed by `git ls-files` are backed up, plus the current commit
-  SHA.
-- On restore, git is reset to the saved commit SHA and the tracked files are
-  copied back.
+- Before each deploy, a backup is created by rsyncing `/config` (minus
+  excluded paths) into `/config/.git_pull_backups/<timestamp>/`.
+- On validation failure, the backup is rsynced back to `/config` with
+  `--delete`, restoring the exact pre-deploy state.
 - A maximum of 3 backups are retained.
+- Backups never contain protected paths (same exclude list as deploy).
 
 ### Logging
 
@@ -202,15 +174,14 @@ Name of the tracked repository. Leave this as `origin` if you are unsure.
 `pull`/`reset`: Command to run. Leave this as `pull` if you are unsure.
 
 - `pull` -- Incorporates changes from a remote repository into the current
-  branch. Will preserve any local changes to tracked files.
-- `reset` -- Will execute `git reset --hard` and overwrite any local changes
-  to tracked files and update from the remote repository.
+  branch. Will preserve any local changes to tracked files in the staging repo.
+- `reset` -- Will execute `git reset --hard` in the staging repo and overwrite
+  any local changes, then deploy to `/config`.
 
 ### Option: `git_prune` (required)
 
 `true`/`false`: If set to true, the addon will clean-up branches that are
-deleted on the remote repository, but still have cached entries on the local
-machine. Leave this as `false` if you are unsure.
+deleted on the remote repository. Leave this as `false` if you are unsure.
 
 ### Option: `auto_restart` (required)
 
