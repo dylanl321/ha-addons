@@ -17,7 +17,7 @@ function backup::create {
     cd /config || { log::error "Cannot cd into /config"; return 1; }
 
     if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-        log::info "No git repo yet -- skipping backup (nothing to roll back)"
+        log::info "No git repo yet -- skipping tracked-file backup (nothing to roll back)"
         echo "${backup_location}"
         return 0
     fi
@@ -90,9 +90,40 @@ function backup::restore {
         else
             log::warning "Failed to restore ${file}"
         fi
-    done < <(cd "${backup_location}" && find . -type f -not -path './.git-state/*' | sed 's|^\./||')
+    done < <(cd "${backup_location}" && find . -type f -not -path './.git-state/*' -not -path './.protected-paths/*' | sed 's|^\./||')
+
+    if [ -d "${backup_location}/.protected-paths" ]; then
+        log::info "Restoring protected HA paths from backup..."
+        for path in .storage secrets.yaml home-assistant_v2.db .cloud; do
+            if [ -e "${backup_location}/.protected-paths/${path}" ]; then
+                rm -rf "/config/${path}" 2>/dev/null
+                if cp -a "${backup_location}/.protected-paths/${path}" "/config/${path}"; then
+                    log::info "  Restored ${path}"
+                else
+                    log::warning "  Failed to restore ${path}"
+                fi
+            fi
+        done
+    fi
 
     log::info "Restored ${restored} files from backup"
+    return 0
+}
+
+function backup::save-protected-paths {
+    local backup_location="$1"
+    [ -z "$backup_location" ] || [ ! -d "$backup_location" ] && return 1
+
+    cd /config || return 1
+    local dest="${backup_location}/.protected-paths"
+    mkdir -p "$dest" || return 1
+
+    for path in .storage secrets.yaml home-assistant_v2.db .cloud; do
+        if [ -e "$path" ]; then
+            rm -rf "${dest}/${path}" 2>/dev/null
+            cp -a "$path" "${dest}/${path}" 2>/dev/null || log::warning "Failed to back up protected path: ${path}"
+        fi
+    done
     return 0
 }
 
@@ -106,13 +137,10 @@ function backup::cleanup {
 
     if [ "$backup_count" -gt "$MAX_BACKUPS" ]; then
         log::info "Cleaning up old backups (keeping newest ${MAX_BACKUPS})..."
-        find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %p\n' \
-            | sort -n \
-            | head -n -"$MAX_BACKUPS" \
-            | awk '{print $2}' \
-            | while read -r old_backup; do
-                log::info "Removing old backup: ${old_backup}"
-                rm -rf "$old_backup"
-            done
+        (cd "$BACKUP_DIR" && ls -1dt */ 2>/dev/null) | tail -n +$((MAX_BACKUPS + 1)) | while read -r d; do
+            old_backup="${BACKUP_DIR}/${d%/}"
+            log::info "Removing old backup: ${old_backup}"
+            rm -rf "$old_backup"
+        done
     fi
 }

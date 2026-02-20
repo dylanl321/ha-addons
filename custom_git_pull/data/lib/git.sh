@@ -14,6 +14,7 @@ function git::clone {
     fi
 
     safety::snapshot-protected-paths "$SAFETY_SNAPSHOT"
+    backup::save-protected-paths "$backup_location" || true
 
     log::info "Initializing git repository in /config..."
 
@@ -309,13 +310,15 @@ function git::validate-config {
             local is_ignored=""
             for ignored in $RESTART_IGNORED_FILES; do
                 if [ -d "$ignored" ]; then
-                    set +e
-                    is_ignored=$(echo "${changed_file}" | grep "^${ignored}")
-                    set -e
+                    case "$changed_file" in
+                        "${ignored}"|"${ignored}"/*) is_ignored=1 ;;
+                        *) is_ignored="" ;;
+                    esac
                 else
-                    set +e
-                    is_ignored=$(echo "${changed_file}" | grep "^${ignored}$")
-                    set -e
+                    case "$changed_file" in
+                        "${ignored}") is_ignored=1 ;;
+                        *) is_ignored="" ;;
+                    esac
                 fi
                 if [ -n "$is_ignored" ]; then break; fi
             done
