@@ -127,6 +127,24 @@ function backup::save-protected-paths {
     return 0
 }
 
+function backup::restore-protected-paths-only {
+    local backup_location="$1"
+    [ -z "$backup_location" ] || [ ! -d "$backup_location" ] || [ ! -d "${backup_location}/.protected-paths" ] && return 0
+
+    log::info "Re-applying protected HA paths from pre-clone backup (ensure repo did not overwrite)"
+    for path in .storage secrets.yaml home-assistant_v2.db .cloud; do
+        if [ -e "${backup_location}/.protected-paths/${path}" ]; then
+            rm -rf "/config/${path}" 2>/dev/null
+            if cp -a "${backup_location}/.protected-paths/${path}" "/config/${path}"; then
+                log::info "  Restored ${path}"
+            else
+                log::warning "  Failed to restore ${path}"
+            fi
+        fi
+    done
+    return 0
+}
+
 function backup::cleanup {
     if [ ! -d "$BACKUP_DIR" ]; then
         return

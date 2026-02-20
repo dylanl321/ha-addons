@@ -106,6 +106,7 @@ function git::clone {
         bashio::exit.nok "Clone aborted -- protected HA state was destroyed"
     fi
 
+    backup::restore-protected-paths-only "$backup_location"
     safety::ensure-gitignore-entries
     log::info "Git clone (init + fetch + checkout) complete"
 }
