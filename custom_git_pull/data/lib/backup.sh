@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # vim: ft=bash
 # shellcheck shell=bash
-# Backup and restore functions for /config
+# Backup and restore for git-tracked files only.
+# HA runtime state (.storage, databases, secrets, etc.) is never touched.
 
-BACKUP_DIR="/tmp/config-backups"
+BACKUP_DIR="/config/.git_pull_backups"
 MAX_BACKUPS=3
 
 function backup::create {
@@ -13,32 +14,44 @@ function backup::create {
     mkdir -p "${BACKUP_DIR}" || { log::error "Failed to create backup parent directory"; return 1; }
     mkdir "${backup_location}" || { log::error "Failed to create backup directory ${backup_location}"; return 1; }
 
-    log::info "Backing up /config to ${backup_location} (including hidden files)"
+    cd /config || { log::error "Cannot cd into /config"; return 1; }
 
-    # cp -a preserves permissions, timestamps, symlinks, and the /. syntax includes hidden files
-    if ! cp -a /config/. "${backup_location}/"; then
-        log::error "Backup copy failed"
-        rm -rf "${backup_location}"
-        return 1
+    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+        log::info "No git repo yet -- skipping backup (nothing to roll back)"
+        echo "${backup_location}"
+        return 0
     fi
 
-    # Verify backup is not empty
-    local file_count
-    file_count=$(find "${backup_location}" -maxdepth 1 | wc -l)
-    if [ "$file_count" -le 1 ]; then
-        log::error "Backup appears to be empty"
-        rm -rf "${backup_location}"
-        return 1
+    log::info "Backing up git-tracked files to ${backup_location}"
+
+    # Back up only files git knows about (tracked + staged)
+    local file_list
+    file_list=$(git ls-files 2>/dev/null)
+
+    if [ -z "$file_list" ]; then
+        log::info "No tracked files to back up"
+        echo "${backup_location}"
+        return 0
     fi
 
-    # Verify key HA file exists in backup
-    if [ -f /config/configuration.yaml ] && [ ! -f "${backup_location}/configuration.yaml" ]; then
-        log::error "Backup is missing configuration.yaml despite it existing in /config"
-        rm -rf "${backup_location}"
-        return 1
+    while IFS= read -r file; do
+        [ -f "$file" ] || continue
+        local dir
+        dir=$(dirname "$file")
+        mkdir -p "${backup_location}/${dir}" 2>/dev/null
+        cp -a "$file" "${backup_location}/${file}" || log::warning "Failed to copy ${file}"
+    done <<< "$file_list"
+
+    # Also back up the .git directory state (HEAD, refs) so we can restore branch position
+    if [ -f /config/.git/HEAD ]; then
+        mkdir -p "${backup_location}/.git-state"
+        cp /config/.git/HEAD "${backup_location}/.git-state/HEAD" 2>/dev/null
+        git rev-parse HEAD > "${backup_location}/.git-state/commit-sha" 2>/dev/null
     fi
 
-    log::info "Backup complete: ${backup_location} ($(du -sh "${backup_location}" | cut -f1))"
+    local backup_size
+    backup_size=$(du -sh "${backup_location}" | cut -f1)
+    log::info "Backup complete: ${backup_location} (${backup_size})"
     echo "${backup_location}"
     return 0
 }
@@ -51,25 +64,35 @@ function backup::restore {
         return 1
     fi
 
-    log::warning "Restoring /config from backup: ${backup_location}"
+    log::warning "Restoring git-tracked files from backup: ${backup_location}"
 
-    # Clear current /config contents (including hidden files)
-    find /config -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+    cd /config || { log::error "Cannot cd into /config"; return 1; }
 
-    # Restore from backup
-    if ! cp -a "${backup_location}/." /config/; then
-        log::error "[CRITICAL] Failed to restore backup from ${backup_location} to /config!"
-        log::error "[CRITICAL] Backup files remain at ${backup_location} -- manual recovery required"
-        return 1
+    # If we have the original commit SHA, reset git to that state first
+    if [ -f "${backup_location}/.git-state/commit-sha" ] && git rev-parse --is-inside-work-tree &>/dev/null; then
+        local old_sha
+        old_sha=$(cat "${backup_location}/.git-state/commit-sha")
+        if [ -n "$old_sha" ] && git rev-parse --verify "$old_sha" &>/dev/null; then
+            log::info "Resetting git to pre-sync commit ${old_sha}"
+            git reset --hard "$old_sha" &>/dev/null || log::warning "git reset to ${old_sha} failed"
+        fi
     fi
 
-    # Verify the restore worked
-    if [ -f "${backup_location}/configuration.yaml" ] && [ ! -f /config/configuration.yaml ]; then
-        log::error "[CRITICAL] Restore completed but configuration.yaml is missing from /config!"
-        return 1
-    fi
+    # Overwrite only the files that were backed up (git-tracked files)
+    local restored=0
+    while IFS= read -r file; do
+        [ -f "${backup_location}/${file}" ] || continue
+        local dir
+        dir=$(dirname "$file")
+        mkdir -p "/config/${dir}" 2>/dev/null
+        if cp -a "${backup_location}/${file}" "/config/${file}"; then
+            restored=$((restored + 1))
+        else
+            log::warning "Failed to restore ${file}"
+        fi
+    done < <(cd "${backup_location}" && find . -type f -not -path './.git-state/*' | sed 's|^\./||')
 
-    log::info "Restore from backup complete"
+    log::info "Restored ${restored} files from backup"
     return 0
 }
 

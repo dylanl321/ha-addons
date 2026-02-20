@@ -16,6 +16,8 @@ source /lib/backup.sh
 source /lib/ssh.sh
 # shellcheck source=lib/utils.sh
 source /lib/utils.sh
+# shellcheck source=lib/safety.sh
+source /lib/safety.sh
 # shellcheck source=lib/git.sh
 source /lib/git.sh
 

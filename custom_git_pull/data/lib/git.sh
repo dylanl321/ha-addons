@@ -3,8 +3,9 @@
 # shellcheck shell=bash
 # Git operations -- clone, synchronize, and config validation with rollback
 
+SAFETY_SNAPSHOT="/tmp/.git_pull_protected_snapshot"
+
 function git::clone {
-    # Create backup before any destructive operations
     local backup_location
     backup_location=$(backup::create "pre-clone")
     if [ $? -ne 0 ] || [ -z "$backup_location" ]; then
@@ -12,10 +13,8 @@ function git::clone {
         bashio::exit.nok "Clone aborted -- backup failed"
     fi
 
-    # Initialize git repo in-place instead of cloning into /config
-    # git clone requires an empty directory, but /config is a Docker bind mount
-    # that can't be fully emptied. git init + fetch + reset achieves the same
-    # result and naturally preserves untracked files (secrets, .storage, etc.)
+    safety::snapshot-protected-paths "$SAFETY_SNAPSHOT"
+
     log::info "Initializing git repository in /config..."
 
     cd /config || bashio::exit.nok "Cannot cd into /config"
@@ -25,6 +24,8 @@ function git::clone {
         backup::restore "$backup_location"
         bashio::exit.nok "git init failed"
     fi
+
+    safety::ensure-gitignore-entries
 
     log::info "Adding remote ${GIT_REMOTE} -> ${REPOSITORY}"
     if ! git remote add "$GIT_REMOTE" "$REPOSITORY"; then
@@ -42,10 +43,8 @@ function git::clone {
         bashio::exit.nok "git fetch failed, /config has been restored from backup"
     fi
 
-    # Determine the branch to checkout
     local target_branch="${GIT_BRANCH:-main}"
 
-    # Verify the branch exists on the remote
     if ! git rev-parse --verify "${GIT_REMOTE}/${target_branch}" &>/dev/null; then
         local available_branches
         available_branches=$(git branch -r | sed 's/^[[:space:]]*//' | tr '\n' ', ')
@@ -57,6 +56,9 @@ function git::clone {
         bashio::exit.nok "Branch '${target_branch}' not found. Available: ${available_branches}"
     fi
 
+    # Back up any local files that the checkout would overwrite
+    git::backup-conflicting-files "${GIT_REMOTE}/${target_branch}" "$backup_location"
+
     log::info "Checking out branch ${target_branch}..."
     if ! git checkout -f -B "$target_branch" "${GIT_REMOTE}/${target_branch}"; then
         log::error "git checkout failed -- restoring from backup"
@@ -65,11 +67,47 @@ function git::clone {
         bashio::exit.nok "git checkout failed, /config has been restored from backup"
     fi
 
+    if ! safety::verify-protected-paths "$SAFETY_SNAPSHOT" "initial clone checkout"; then
+        log::fatal "Protected paths lost during clone -- restoring from backup"
+        rm -rf /config/.git
+        backup::restore "$backup_location"
+        bashio::exit.nok "Clone aborted -- protected HA state was destroyed"
+    fi
+
+    safety::ensure-gitignore-entries
     log::info "Git clone (init + fetch + checkout) complete"
 }
 
+function git::backup-conflicting-files {
+    local remote_ref="$1"
+    local backup_location="$2"
+
+    cd /config || return 1
+
+    local incoming_files
+    incoming_files=$(git ls-tree -r --name-only "$remote_ref" 2>/dev/null)
+    [ -z "$incoming_files" ] && return 0
+
+    local conflict_dir="${backup_location}/.pre-checkout-conflicts"
+    local conflicts=0
+
+    while IFS= read -r file; do
+        if [ -f "/config/${file}" ]; then
+            local dir
+            dir=$(dirname "$file")
+            mkdir -p "${conflict_dir}/${dir}" 2>/dev/null
+            if cp -a "/config/${file}" "${conflict_dir}/${file}"; then
+                conflicts=$((conflicts + 1))
+            fi
+        fi
+    done <<< "$incoming_files"
+
+    if [ "$conflicts" -gt 0 ]; then
+        log::warning "${conflicts} existing file(s) will be overwritten by checkout -- backed up to ${conflict_dir}"
+    fi
+}
+
 function git::synchronize {
-    # is /config a local git repo?
     if ! git rev-parse --is-inside-work-tree &>/dev/null; then
         log::warning "No git repository in /config -- performing initial clone"
         git::clone
@@ -78,7 +116,6 @@ function git::synchronize {
 
     log::info "Local git repository exists"
 
-    # Is the local repo set to the correct origin?
     local current_remote
     current_remote=$(git remote get-url --all "$GIT_REMOTE" | head -n 1)
     if [ "$current_remote" != "$REPOSITORY" ]; then
@@ -90,7 +127,9 @@ function git::synchronize {
     log::info "Git origin is correctly set to ${REPOSITORY}"
     OLD_COMMIT=$(git rev-parse HEAD)
 
-    # Create a backup before any git operations that modify the working tree
+    safety::snapshot-protected-paths "$SAFETY_SNAPSHOT"
+    safety::log-untracked-inventory
+
     local backup_location
     backup_location=$(backup::create "pre-sync")
     if [ $? -ne 0 ] || [ -z "$backup_location" ]; then
@@ -153,6 +192,14 @@ function git::synchronize {
             ;;
         reset)
             log::info "Starting git reset..."
+            local diff_stat
+            diff_stat=$(git diff --stat HEAD "${GIT_REMOTE}/${GIT_CURRENT_BRANCH}" 2>/dev/null)
+            if [ -n "$diff_stat" ]; then
+                log::info "Changes that will be discarded by reset:"
+                while IFS= read -r line; do
+                    log::info "  ${line}"
+                done <<< "$diff_stat"
+            fi
             if ! git reset --hard "$GIT_REMOTE"/"$GIT_CURRENT_BRANCH"; then
                 log::error "Git reset failed"
                 git_op_failed=true
@@ -170,6 +217,12 @@ function git::synchronize {
         return 1
     fi
 
+    if ! safety::verify-protected-paths "$SAFETY_SNAPSHOT" "git ${GIT_COMMAND}"; then
+        log::fatal "Protected paths lost during git ${GIT_COMMAND} -- restoring from backup"
+        backup::restore "$backup_location"
+        return 1
+    fi
+
     log::info "Git synchronize complete"
     backup::cleanup
 }
@@ -177,7 +230,6 @@ function git::synchronize {
 function git::validate-config {
     log::info "Checking if anything changed..."
 
-    # On initial clone OLD_COMMIT is not set -- skip comparison
     if [ -z "${OLD_COMMIT:-}" ]; then
         log::info "Initial clone detected, skipping change comparison"
         log::info "Validating Home Assistant configuration..."
@@ -202,12 +254,19 @@ function git::validate-config {
     if ! bashio::core.check; then
         log::error "Configuration check FAILED after pulling new changes"
 
-        # Revert to the old commit so HA stays on a known-good config
         log::warning "Reverting to previous commit ${OLD_COMMIT} to protect Home Assistant"
+        local revert_diff
+        revert_diff=$(git diff --stat HEAD "$OLD_COMMIT" 2>/dev/null)
+        if [ -n "$revert_diff" ]; then
+            log::info "Files being reverted:"
+            while IFS= read -r line; do
+                log::info "  ${line}"
+            done <<< "$revert_diff"
+        fi
+
         if git reset --hard "$OLD_COMMIT"; then
             log::info "Successfully reverted to ${OLD_COMMIT}"
 
-            # Verify the reverted config is actually good
             if bashio::core.check; then
                 log::info "Reverted configuration passes validation"
             else
@@ -228,7 +287,6 @@ function git::validate-config {
         return
     fi
 
-    # Determine if a restart is needed based on changed files vs ignored files
     local do_restart="false"
     local changed_files
     changed_files=$(git diff "$OLD_COMMIT" "$NEW_COMMIT" --name-only)
