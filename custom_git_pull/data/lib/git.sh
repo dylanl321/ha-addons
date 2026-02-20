@@ -29,9 +29,14 @@ function git::clone {
     safety::snapshot-protected-paths "$SAFETY_SNAPSHOT"
     backup::save-protected-paths "$backup_location" || true
 
-    log::info "Initializing git repository in /config..."
-
     cd /config || bashio::exit.nok "Cannot cd into /config"
+
+    if [ -d /config/.git ]; then
+        log::info "Removing existing .git for clean clone (avoid bad object HEAD)"
+        git::remove-git-dir
+    fi
+
+    log::info "Initializing git repository in /config..."
 
     if ! git init; then
         log::error "git init failed -- restoring from backup"
