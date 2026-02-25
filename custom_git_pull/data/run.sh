@@ -37,6 +37,7 @@ DEPLOY_DELETE=$(bashio::config 'deploy_delete')
 DEPLOY_DRY_RUN=$(bashio::config 'deploy_dry_run')
 MIRROR_PROTECT_USER_DIRS=$(bashio::config 'mirror_protect_user_dirs')
 ALLOW_LEGACY_CONFIG_GIT_DIR=$(bashio::config 'allow_legacy_config_git_dir')
+PUSH_CUSTOM_COMPONENTS=$(bashio::config 'push_custom_components')
 REPOSITORY=$(bashio::config 'repository')
 AUTO_RESTART=$(bashio::config 'auto_restart')
 RESTART_IGNORED_FILES=$(bashio::config 'restart_ignore | join(" ")')
@@ -61,6 +62,9 @@ log::info "Branch: ${GIT_BRANCH}"
 log::info "Command: ${GIT_COMMAND}"
 log::info "Auto restart: ${AUTO_RESTART}"
 log::info "Deploy delete: ${DEPLOY_DELETE}"
+if [ "$PUSH_CUSTOM_COMPONENTS" == "true" ]; then
+    log::info "Push custom_components: ENABLED"
+fi
 if [ "$DEPLOY_DRY_RUN" == "true" ]; then
     log::info "Deploy dry run: ENABLED (no changes will be made)"
 fi
@@ -114,6 +118,7 @@ while true; do
             if [ -n "${NEW_COMMIT:-}" ] && [ "${NEW_COMMIT:-}" != "${OLD_COMMIT:-}" ]; then
                 git::validate-config
             fi
+            git::push-local-changes
         fi
 
         DEPLOY_IN_PROGRESS=""

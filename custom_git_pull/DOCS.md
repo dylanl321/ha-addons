@@ -48,6 +48,7 @@ touched by the addon under any circumstances:
 
 | Path | What it contains |
 |------|-----------------|
+| `custom_components/` | HACS-installed and custom integrations (managed separately, see below) |
 | `.storage/` | Entity registry, device registry, area registry, auth tokens, integration config, UI settings |
 | `secrets.yaml` | Passwords, API keys, tokens referenced by `!secret` in config |
 | `home-assistant_v2.db` | State history and long-term statistics database |
@@ -107,6 +108,8 @@ Each sync cycle (runs once, or repeats on an interval):
 9. **Deploy**: rsync from staging to `/config` (minus excludes).
 10. **Validate**: run `bashio::core.check`. Rollback on failure.
 11. If `auto_restart` enabled and relevant files changed, restart HA.
+12. **Push custom_components** (if enabled): rsync `custom_components/` from
+    `/config` back into the staging repo, commit, and push to remote.
 
 ### Backup and Rollback
 
@@ -116,6 +119,30 @@ Each sync cycle (runs once, or repeats on an interval):
   `--delete`, restoring the exact pre-deploy state.
 - A maximum of 3 backups are retained.
 - Backups never contain protected paths (same exclude list as deploy).
+
+### HACS Integration Management
+
+`custom_components/` is excluded from the normal pull-deploy rsync. This means
+HACS-installed integrations on the running instance are never overwritten or
+deleted by a git sync. HACS fully owns `/config/custom_components/` at runtime.
+
+To version-control HACS integrations in your git repository, enable the
+`push_custom_components` option. When enabled, after each sync cycle the addon
+will:
+
+1. Rsync `/config/custom_components/` into the staging repo.
+2. Stage and commit any new or changed files.
+3. Push the commit to the remote repository.
+
+This keeps your git repo up to date with whatever HACS installs or updates on
+the instance, without the pull-deploy step touching `custom_components/`.
+
+**Requirements for push_custom_components:**
+
+- The deployment key (or credentials) must have **write access** to the
+  repository. Read-only deploy keys will cause the push to fail.
+- `git_command` should be set to `pull` (not `reset`), since pushed commits
+  need to merge cleanly on the next cycle.
 
 ### Logging
 
@@ -142,6 +169,7 @@ git_command: pull
 git_remote: origin
 git_prune: false
 auto_restart: false
+push_custom_components: false
 restart_ignore:
   - ui-lovelace.yaml
   - ".gitignore"
@@ -187,6 +215,14 @@ deleted on the remote repository. Leave this as `false` if you are unsure.
 
 `true`/`false`: Restart Home Assistant when the configuration has changed (and
 is valid).
+
+### Option: `push_custom_components` (optional)
+
+`true`/`false`: After each sync cycle, rsync `custom_components/` from the
+running instance back into the staging repo, commit any changes, and push to
+the remote. This keeps HACS-installed integrations version-controlled in your
+git repository. Requires the deployment key or credentials to have write access.
+Default is `false`.
 
 ### Option: `restart_ignore` (optional)
 

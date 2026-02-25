@@ -1,0 +1,66 @@
+repository: git@github.com:dylanl321/HomeAssistantConfig.git
+git_branch: master
+git_remote: origin
+auto_restart: false
+restart_ignore:
+  - ui-lovelace.yaml
+  - .gitignore
+git_command: pull
+git_prune: false
+push_custom_components: false
+deployment_key:
+  - >-
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    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
+    gUGIZK5zCu0AAAAAAQID -----END OPENSSH PRIVATE KEY-----
+deployment_user: ""
+deployment_password: ""
+deployment_key_protocol: rsa
+repeat:
+  active: false
+  interval: 300

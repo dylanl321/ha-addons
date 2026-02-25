@@ -1,5 +1,5 @@
 ---
-version: 3.0.0
+version: 3.1.0
 slug: custom_git_pull
 name: Custom Git Pull
 description: Custom git pull to update the local configuration
@@ -28,6 +28,7 @@ options:
   deploy_dry_run: false
   mirror_protect_user_dirs: true
   allow_legacy_config_git_dir: false
+  push_custom_components: false
   deployment_key: []
   deployment_user: ""
   deployment_password: ""
@@ -48,6 +49,7 @@ schema:
   deploy_dry_run: bool
   mirror_protect_user_dirs: bool
   allow_legacy_config_git_dir: bool
+  push_custom_components: bool
   deployment_key:
     - str
   deployment_user: str

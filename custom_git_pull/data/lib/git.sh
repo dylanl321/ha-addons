@@ -7,6 +7,7 @@
 STAGING_DIR="/config/.git_sync_repo"
 
 RSYNC_EXCLUDES=(
+    "custom_components/"
     ".storage/"
     "secrets.yaml"
     "home-assistant_v2.db"
@@ -380,4 +381,65 @@ function git::validate-config {
     else
         log::info "No restart required -- only ignored files changed"
     fi
+}
+
+function git::push-local-changes {
+    if [ "${PUSH_CUSTOM_COMPONENTS:-false}" != "true" ]; then
+        return 0
+    fi
+
+    if [ ! -d "$STAGING_DIR/.git" ]; then
+        log::warning "push_custom_components: no staging repo -- skipping push"
+        return 0
+    fi
+
+    if [ ! -d "/config/custom_components" ]; then
+        log::info "push_custom_components: no custom_components/ in /config -- nothing to push"
+        return 0
+    fi
+
+    log::info "push_custom_components: syncing /config/custom_components/ into staging repo..."
+
+    mkdir -p "${STAGING_DIR}/custom_components"
+
+    if ! rsync -a --delete --safe-links --no-owner --no-group \
+        /config/custom_components/ "${STAGING_DIR}/custom_components/" 2>&1; then
+        log::error "push_custom_components: rsync from /config to staging failed"
+        return 1
+    fi
+
+    cd "$STAGING_DIR" || {
+        log::error "push_custom_components: cannot cd into staging directory"
+        return 1
+    }
+
+    git add custom_components/ 2>/dev/null
+
+    if git diff --cached --quiet 2>/dev/null; then
+        log::info "push_custom_components: custom_components/ is already up to date in git"
+        return 0
+    fi
+
+    local changed_summary
+    changed_summary=$(git diff --cached --stat 2>/dev/null | tail -n 1)
+    log::info "push_custom_components: staging changes -- ${changed_summary}"
+
+    git config user.email "addon@homeassistant.local"
+    git config user.name "Custom Git Pull Addon"
+
+    if ! git commit -m "chore: sync custom_components from instance
+
+Auto-committed by Custom Git Pull addon (push_custom_components)."; then
+        log::error "push_custom_components: git commit failed"
+        return 1
+    fi
+
+    log::info "push_custom_components: pushing to ${GIT_REMOTE} ${GIT_BRANCH}..."
+    if ! git push "$GIT_REMOTE" "HEAD:${GIT_BRANCH}"; then
+        log::error "push_custom_components: git push failed -- ensure deploy key has write access"
+        return 1
+    fi
+
+    log::info "push_custom_components: successfully pushed custom_components/ changes to remote"
+    return 0
 }
