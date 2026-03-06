@@ -20,6 +20,8 @@ source /lib/backup.sh
 source /lib/ssh.sh
 # shellcheck source=lib/utils.sh
 source /lib/utils.sh
+# shellcheck source=lib/webhook.sh
+source /lib/webhook.sh
 
 ################
 # Load configuration
@@ -38,17 +40,21 @@ DEPLOY_DRY_RUN=$(bashio::config 'deploy_dry_run')
 MIRROR_PROTECT_USER_DIRS=$(bashio::config 'mirror_protect_user_dirs')
 ALLOW_LEGACY_CONFIG_GIT_DIR=$(bashio::config 'allow_legacy_config_git_dir')
 PUSH_CUSTOM_COMPONENTS=$(bashio::config 'push_custom_components')
+PUSH_ON_START=$(bashio::config 'push_on_start')
 REPOSITORY=$(bashio::config 'repository')
 AUTO_RESTART=$(bashio::config 'auto_restart')
 RESTART_IGNORED_FILES=$(bashio::config 'restart_ignore | join(" ")')
 REPEAT_ACTIVE=$(bashio::config 'repeat.active')
 REPEAT_INTERVAL=$(bashio::config 'repeat.interval')
+WEBHOOK_ENABLED=$(bashio::config 'webhook.enabled')
+WEBHOOK_SECRET=$(bashio::config 'webhook.secret')
+WEBHOOK_PORT=$(bashio::config 'webhook.port')
 
 ################
 # Main
 ################
 
-trap utils::cleanup-on-exit EXIT
+trap 'webhook::stop 2>/dev/null; utils::cleanup-on-exit' EXIT
 
 git config --global pull.rebase false
 
@@ -68,7 +74,13 @@ fi
 if [ "$DEPLOY_DRY_RUN" == "true" ]; then
     log::info "Deploy dry run: ENABLED (no changes will be made)"
 fi
+if [ "$PUSH_ON_START" == "true" ]; then
+    log::info "Push on start: ENABLED (local /config will be pushed to GitHub first)"
+fi
 log::info "Repeat: ${REPEAT_ACTIVE} (interval: ${REPEAT_INTERVAL}s)"
+if [ "$WEBHOOK_ENABLED" == "true" ]; then
+    log::info "Webhook: enabled (port: ${WEBHOOK_PORT})"
+fi
 
 if [ ! -d /config/.storage ]; then
     log::warning ".storage/ is missing from /config -- HA may show onboarding screen"
@@ -99,7 +111,27 @@ fi
 
 DEPLOY_IN_PROGRESS=""
 
-while true; do
+if [ "$PUSH_ON_START" == "true" ]; then
+    if utils::acquire-lock; then
+        ssh::check-connection
+        utils::setup-credentials
+        git::push-config
+        utils::release-lock
+    fi
+fi
+
+if [ "$WEBHOOK_ENABLED" == "true" ]; then
+    log::info "Webhook: enabled on port ${WEBHOOK_PORT}"
+    if [ -n "$WEBHOOK_SECRET" ] && [ "$WEBHOOK_SECRET" != "null" ]; then
+        log::info "Webhook: HMAC-SHA256 signature verification enabled"
+    else
+        log::warning "Webhook: no secret configured -- requests will NOT be verified"
+    fi
+    webhook::start "$WEBHOOK_PORT" "$WEBHOOK_SECRET" &
+    WEBHOOK_LISTENER_PID=$!
+fi
+
+function run::do-sync {
     if utils::acquire-lock; then
         ssh::check-connection
         utils::setup-credentials
@@ -113,7 +145,7 @@ while true; do
             if [ "$DEPLOY_DRY_RUN" == "true" ]; then
                 log::info "Dry run complete. Disable deploy_dry_run to apply changes."
                 utils::release-lock
-                exit 0
+                return 1
             fi
             if [ -n "${NEW_COMMIT:-}" ] && [ "${NEW_COMMIT:-}" != "${OLD_COMMIT:-}" ]; then
                 git::validate-config
@@ -124,11 +156,42 @@ while true; do
         DEPLOY_IN_PROGRESS=""
         utils::release-lock
     fi
+    return 0
+}
 
-    if [ "$REPEAT_ACTIVE" != "true" ]; then
-        exit 0
+run::do-sync || exit 0
+
+if [ "$REPEAT_ACTIVE" != "true" ] && [ "$WEBHOOK_ENABLED" != "true" ]; then
+    exit 0
+fi
+
+while true; do
+    if [ "$WEBHOOK_ENABLED" == "true" ]; then
+        local_interval=5
+        if [ "$REPEAT_ACTIVE" == "true" ]; then
+            elapsed=0
+            while [ "$elapsed" -lt "$REPEAT_INTERVAL" ]; do
+                if webhook::triggered; then
+                    log::info "Webhook trigger received -- starting sync"
+                    run::do-sync || true
+                fi
+                sleep "$local_interval"
+                elapsed=$((elapsed + local_interval))
+            done
+            log::info "Polling interval reached -- starting scheduled sync"
+            run::do-sync || true
+        else
+            while true; do
+                if webhook::triggered; then
+                    log::info "Webhook trigger received -- starting sync"
+                    run::do-sync || true
+                fi
+                sleep "$local_interval"
+            done
+        fi
+    else
+        log::info "Next sync in ${REPEAT_INTERVAL} seconds"
+        sleep "$REPEAT_INTERVAL"
+        run::do-sync || true
     fi
-
-    log::info "Next sync in ${REPEAT_INTERVAL} seconds"
-    sleep "$REPEAT_INTERVAL"
 done

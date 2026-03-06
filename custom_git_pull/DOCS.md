@@ -77,10 +77,13 @@ Additional addon-internal paths are also excluded:
 4. Warns if `.storage/` is missing (HA may show onboarding).
 5. Sets up SSH key if configured (reads from addon config, reconstructs PEM
    format if needed, validates fingerprint).
+6. If `push_on_start` is enabled, rsyncs `/config` into the staging repo,
+   commits any local changes, and pushes to GitHub before pulling.
 
 #### Sync Cycle
 
-Each sync cycle (runs once, or repeats on an interval):
+Each sync cycle (runs once, repeats on an interval, or is triggered by a
+GitHub webhook):
 
 1. **Lock** -- Acquire an `flock`-based lock. Automatically released on process
    death.
@@ -170,10 +173,15 @@ git_remote: origin
 git_prune: false
 auto_restart: false
 push_custom_components: false
+push_on_start: false
 restart_ignore:
   - ui-lovelace.yaml
   - ".gitignore"
   - exampledirectory/
+webhook:
+  enabled: false
+  secret: ""
+  port: 7654
 repeat:
   active: false
   interval: 300
@@ -224,6 +232,15 @@ the remote. This keeps HACS-installed integrations version-controlled in your
 git repository. Requires the deployment key or credentials to have write access.
 Default is `false`.
 
+### Option: `push_on_start` (optional)
+
+`true`/`false`: When enabled, the addon pushes any local `/config` changes to
+GitHub **before** performing the first pull. This captures configuration changes
+you made through the HA UI, File Editor, or any other local tool and commits
+them to your repository. The same rsync exclude list applies -- protected paths
+like `.storage/`, `secrets.yaml`, and databases are never pushed. Requires the
+deployment key or credentials to have **write access**. Default is `false`.
+
 ### Option: `restart_ignore` (optional)
 
 When `auto_restart` is enabled, changes to these files will not make HA
@@ -238,6 +255,54 @@ restart. Full directories to ignore can be specified.
 #### Option: `repeat.interval` (required)
 
 The interval in seconds to poll the repo for if automatic polling is enabled.
+
+### Option group: `webhook`
+
+Instead of (or in addition to) polling, you can configure a GitHub webhook so
+the addon syncs immediately when you push.
+
+#### Option: `webhook.enabled` (required)
+
+`true`/`false`: Enable the webhook HTTP listener. When enabled, the addon keeps
+running and listens for incoming POST requests from GitHub. Default is `false`.
+
+#### Option: `webhook.port` (required)
+
+The TCP port the webhook listener binds to inside the container. Default is
+`7654`. You must also forward this port through your network to the Home
+Assistant host (see setup instructions below).
+
+#### Option: `webhook.secret` (optional)
+
+A shared secret used to verify that incoming requests actually came from GitHub
+(HMAC-SHA256 signature validation). **Strongly recommended.** If left empty,
+any POST request will trigger a sync.
+
+### Webhook Setup
+
+1. In the addon configuration, set `webhook.enabled` to `true` and choose a
+   `webhook.secret` (any random string -- keep it safe).
+
+2. Configure port forwarding. In the addon's **Network** section in the HA UI,
+   map the container port (default `7654`) to a host port. For example, map
+   `7654` to `7654`.
+
+3. Ensure the port is reachable from the internet. This typically means:
+   - A port-forward rule on your router (external port -> HA host:7654).
+   - Or use a reverse proxy / Cloudflare tunnel that routes a URL to the port.
+
+4. In your GitHub repository, go to **Settings > Webhooks > Add webhook**:
+   - **Payload URL**: `http://<your-public-ip-or-domain>:7654`
+   - **Content type**: `application/json`
+   - **Secret**: The same value you set in `webhook.secret`
+   - **Events**: Select "Just the push event"
+
+5. Click **Add webhook**. GitHub will send a `ping` event -- check the addon
+   logs to confirm it was received.
+
+Now every push to the configured branch will trigger an immediate sync. You can
+combine this with `repeat` for belt-and-suspenders reliability (webhook for
+instant updates, polling as a fallback).
 
 ### Option: `deployment_user` (optional)
 

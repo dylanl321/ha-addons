@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.3.0
+
+- Add `push_on_start` option to push local /config changes to GitHub before
+  pulling, so HA UI edits and local changes are captured in the repository
+- Change `boot` from `manual` to `auto` so the addon starts automatically
+  with Home Assistant
+- Fix addon stopping prematurely when webhook is the only keep-alive mechanism
+
+## 3.2.0
+
+- Add GitHub webhook support for instant sync on push
+- New `webhook.enabled`, `webhook.secret`, and `webhook.port` config options
+- Webhook validates GitHub HMAC-SHA256 signatures when a secret is configured
+- Only triggers sync for pushes to the configured branch
+- Can be combined with polling for fallback reliability
+
 ## 3.1.0
 
 - Exclude `custom_components/` from pull-deploy rsync so HACS-installed

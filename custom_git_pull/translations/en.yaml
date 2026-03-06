@@ -56,6 +56,13 @@ configuration:
       If /config/.git exists (from an older addon version), the addon will
       block mirror-mode deploys by default. Enable this to allow mirror-mode
       deploys even when /config/.git is present.
+  push_on_start:
+    name: Push On Start
+    description: >-
+      When enabled, the addon will push any local /config changes to GitHub
+      before pulling. This captures any configuration changes you made through
+      the Home Assistant UI or File Editor and commits them to your repository.
+      Requires the deployment key or credentials to have write access.
   deployment_key:
     name: Deployment Key
     description: >-
@@ -74,6 +81,13 @@ configuration:
   deployment_key_protocol:
     name: Deployment Key Protocol
     description: The key protocol
+  webhook:
+    name: GitHub Webhook
+    description: >-
+      Configure a webhook listener so GitHub can notify the addon to pull
+      immediately when you push. Set up a GitHub webhook pointing to
+      http://<your-ha-host>:7654 with content type application/json and
+      a secret that matches the one configured here.
   repeat:
     name: Polling
     description: >-

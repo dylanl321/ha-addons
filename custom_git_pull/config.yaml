@@ -1,5 +1,5 @@
 ---
-version: 3.1.0
+version: 3.3.0
 slug: custom_git_pull
 name: Custom Git Pull
 description: Custom git pull to update the local configuration
@@ -7,7 +7,7 @@ url: https://github.com/dylanl321/ha-addons/tree/main/custom_git_pull
 arch:
   - aarch64
   - amd64
-boot: manual
+boot: auto
 hassio_api: true
 hassio_role: homeassistant
 image: ghcr.io/dylanl321/{arch}-addon-custom_git_pull
@@ -29,13 +29,22 @@ options:
   mirror_protect_user_dirs: true
   allow_legacy_config_git_dir: false
   push_custom_components: false
+  push_on_start: false
   deployment_key: []
   deployment_user: ""
   deployment_password: ""
   deployment_key_protocol: rsa
+  webhook:
+    enabled: false
+    secret: ""
+    port: 7654
   repeat:
     active: false
     interval: 300
+ports:
+  "7654/tcp": null
+ports_description:
+  "7654/tcp": Webhook listener port (configure in webhook.port)
 schema:
   repository: str
   git_branch: str
@@ -50,11 +59,16 @@ schema:
   mirror_protect_user_dirs: bool
   allow_legacy_config_git_dir: bool
   push_custom_components: bool
+  push_on_start: bool
   deployment_key:
     - str
   deployment_user: str
   deployment_password: password
   deployment_key_protocol: match(rsa|dsa|ecdsa|ed25519|rsa)
+  webhook:
+    enabled: bool
+    secret: str?
+    port: "int(1024,65535)"
   repeat:
     active: bool
     interval: int

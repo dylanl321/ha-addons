@@ -2,7 +2,7 @@ ARG BUILD_FROM
 FROM $BUILD_FROM
 
 # Setup base
-RUN apk add --no-cache jq curl git openssh-client rsync
+RUN apk add --no-cache jq curl git openssh-client rsync socat openssl
 
 # Copy data
 COPY data/lib/ /lib/

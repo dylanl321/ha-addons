@@ -443,3 +443,65 @@ Auto-committed by Custom Git Pull addon (push_custom_components)."; then
     log::info "push_custom_components: successfully pushed custom_components/ changes to remote"
     return 0
 }
+
+function git::push-config {
+    log::info "push_on_start: pushing local /config to GitHub before pulling..."
+
+    if [ ! -d "$STAGING_DIR/.git" ]; then
+        log::warning "push_on_start: no staging repo yet -- performing initial clone first"
+        mkdir -p "$STAGING_DIR" || {
+            log::error "push_on_start: cannot create staging directory"
+            return 1
+        }
+        if ! git clone --branch "${GIT_BRANCH:-main}" --single-branch "$REPOSITORY" "$STAGING_DIR"; then
+            log::error "push_on_start: initial clone failed"
+            rm -rf "$STAGING_DIR"
+            return 1
+        fi
+    fi
+
+    cd "$STAGING_DIR" || {
+        log::error "push_on_start: cannot cd into staging directory"
+        return 1
+    }
+
+    git::build-rsync-excludes
+
+    log::info "push_on_start: syncing /config into staging repo..."
+    if ! rsync -a --safe-links --no-owner --no-group \
+        "${RSYNC_EXCLUDE_ARGS[@]}" \
+        /config/ "${STAGING_DIR}/" 2>&1; then
+        log::error "push_on_start: rsync from /config to staging failed"
+        return 1
+    fi
+
+    git add -A 2>/dev/null
+
+    if git diff --cached --quiet 2>/dev/null; then
+        log::info "push_on_start: /config matches the repository -- nothing to push"
+        return 0
+    fi
+
+    local changed_summary
+    changed_summary=$(git diff --cached --stat 2>/dev/null | tail -n 1)
+    log::info "push_on_start: local changes -- ${changed_summary}"
+
+    git config user.email "addon@homeassistant.local"
+    git config user.name "Custom Git Pull Addon"
+
+    if ! git commit -m "chore: sync local config from Home Assistant
+
+Auto-committed by Custom Git Pull addon (push_on_start)."; then
+        log::error "push_on_start: git commit failed"
+        return 1
+    fi
+
+    log::info "push_on_start: pushing to ${GIT_REMOTE} ${GIT_BRANCH}..."
+    if ! git push "$GIT_REMOTE" "HEAD:${GIT_BRANCH}"; then
+        log::error "push_on_start: git push failed -- ensure deploy key has write access"
+        return 1
+    fi
+
+    log::info "push_on_start: successfully pushed local /config changes to GitHub"
+    return 0
+}
