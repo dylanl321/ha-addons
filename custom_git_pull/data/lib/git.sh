@@ -14,6 +14,7 @@ RSYNC_EXCLUDES=(
     "home-assistant_v2.db-wal"
     "home-assistant_v2.db-shm"
     ".cloud/"
+    ".cache/"
     "backups/"
     "media/"
     "ssl/"
@@ -464,6 +465,12 @@ function git::push-config {
         log::error "push_on_start: cannot cd into staging directory"
         return 1
     }
+
+    log::info "push_on_start: fetching latest from remote before syncing..."
+    if ! git fetch "$GIT_REMOTE" "$GIT_BRANCH" 2>&1; then
+        log::warning "push_on_start: fetch failed, will try push anyway"
+    fi
+    git pull --no-rebase "$GIT_REMOTE" "$GIT_BRANCH" 2>&1 || true
 
     git::build-rsync-excludes
 

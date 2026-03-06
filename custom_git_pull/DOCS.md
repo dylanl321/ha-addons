@@ -55,6 +55,7 @@ touched by the addon under any circumstances:
 | `home-assistant_v2.db-wal` | SQLite write-ahead log (companion to the database) |
 | `home-assistant_v2.db-shm` | SQLite shared memory (companion to the database) |
 | `.cloud/` | Nabu Casa / Home Assistant Cloud connection state |
+| `.cache/` | HA runtime cache (integration brand icons, etc.) |
 | `backups/` | Home Assistant backup archives |
 | `tts/` | Text-to-speech cache |
 | `deps/` | Python dependency cache |

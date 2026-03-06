@@ -115,7 +115,9 @@ if [ "$PUSH_ON_START" == "true" ]; then
     if utils::acquire-lock; then
         ssh::check-connection
         utils::setup-credentials
-        git::push-config
+        if ! git::push-config; then
+            log::warning "push_on_start failed -- continuing with normal sync"
+        fi
         utils::release-lock
     fi
 fi

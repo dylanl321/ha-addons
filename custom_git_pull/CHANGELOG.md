@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.4.1
+
+- Fix push_on_start failing when remote has newer commits: now fetches and
+  pulls before committing and pushing local changes
+- Add `.cache/` to rsync excludes (HA runtime brand icon cache)
+- Make push_on_start non-fatal: addon continues to normal sync if push fails
+
 ## 3.4.0
 
 - Add stdin trigger support via `hassio.addon_stdin` -- the addon now always
