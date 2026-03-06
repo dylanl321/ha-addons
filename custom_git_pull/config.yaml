@@ -1,5 +1,5 @@
 ---
-version: 3.3.0
+version: 3.4.0
 slug: custom_git_pull
 name: Custom Git Pull
 description: Custom git pull to update the local configuration
@@ -12,6 +12,7 @@ hassio_api: true
 hassio_role: homeassistant
 image: ghcr.io/dylanl321/{arch}-addon-custom_git_pull
 init: false
+stdin: true
 map:
   - config:rw
 options:

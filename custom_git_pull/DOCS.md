@@ -304,6 +304,59 @@ Now every push to the configured branch will trigger an immediate sync. You can
 combine this with `repeat` for belt-and-suspenders reliability (webhook for
 instant updates, polling as a fallback).
 
+### Triggering via Home Assistant Automation (Recommended)
+
+If you can't expose extra ports (e.g. behind CGNAT, double-NAT, or Nabu Casa),
+you can use a **Home Assistant webhook automation** instead. GitHub sends a
+webhook to HA's existing external URL, the automation fires, and it writes to
+the addon's stdin to trigger a sync. No extra ports needed.
+
+The addon always listens on stdin for trigger commands. You can send:
+- `sync`, `trigger`, or `pull` -- triggers a git sync
+- `status` -- logs that the addon is running
+
+#### Step 1: Create the automation
+
+Add this to your HA automations (Settings > Automations > Create Automation >
+Edit in YAML):
+
+```yaml
+alias: "Git Pull - GitHub Push Trigger"
+description: "Triggers git pull addon when GitHub sends a push webhook"
+triggers:
+  - trigger: webhook
+    allowed_methods:
+      - POST
+    local_only: false
+    webhook_id: "github-push-trigger"
+actions:
+  - action: hassio.addon_stdin
+    data:
+      addon: custom_git_pull
+      input:
+        command: sync
+mode: single
+```
+
+#### Step 2: Configure GitHub webhook
+
+In your GitHub repository, go to **Settings > Webhooks > Add webhook**:
+
+- **Payload URL**: `https://<your-ha-external-url>/api/webhook/github-push-trigger`
+- **Content type**: `application/json`
+- **Secret**: *(leave empty -- HA webhook IDs are unguessable tokens)*
+- **Events**: Select "Just the push event"
+
+> **Tip**: Replace `github-push-trigger` in both the automation and GitHub URL
+> with a random string (e.g. `git-sync-a8f3b2c1d4e5`) to make the webhook ID
+> harder to guess.
+
+#### Step 3: Test
+
+Push a commit to your repository. Check the addon logs -- you should see
+`Stdin trigger: received 'sync' command -- triggering sync` followed by the
+normal git pull output.
+
 ### Option: `deployment_user` (optional)
 
 Username to use when authenticating to a repository with a username and

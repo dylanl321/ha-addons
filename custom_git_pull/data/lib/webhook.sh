@@ -6,6 +6,7 @@
 
 WEBHOOK_TRIGGER_FILE="/tmp/webhook_trigger"
 WEBHOOK_PID_FILE="/tmp/webhook.pid"
+STDIN_PID_FILE="/tmp/stdin_listener.pid"
 
 function webhook::hmac-sha256 {
     local secret="$1" payload="$2"
@@ -150,4 +151,44 @@ function webhook::triggered {
         return 0
     fi
     return 1
+}
+
+function stdin::start {
+    log::info "Stdin trigger: listening for commands via hassio.addon_stdin"
+
+    while read -r line; do
+        line="${line%%$'\r'}"
+        line="${line%%$'\n'}"
+
+        local command
+        command=$(echo "$line" | jq -r '.command // empty' 2>/dev/null)
+
+        if [ -z "$command" ]; then
+            command="$line"
+        fi
+
+        case "$command" in
+            sync|trigger|pull)
+                log::info "Stdin trigger: received '${command}' command -- triggering sync"
+                touch "$WEBHOOK_TRIGGER_FILE"
+                ;;
+            status)
+                log::info "Stdin trigger: addon is running (PID $$)"
+                ;;
+            *)
+                log::warning "Stdin trigger: unknown command '${command}' (expected: sync, trigger, pull, status)"
+                ;;
+        esac
+    done < /proc/1/fd/0 &
+
+    echo "$!" > "$STDIN_PID_FILE"
+}
+
+function stdin::stop {
+    if [ -f "$STDIN_PID_FILE" ]; then
+        local pid
+        pid=$(cat "$STDIN_PID_FILE")
+        kill "$pid" 2>/dev/null || true
+        rm -f "$STDIN_PID_FILE"
+    fi
 }

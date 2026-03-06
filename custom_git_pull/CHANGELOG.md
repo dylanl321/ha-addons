@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.4.0
+
+- Add stdin trigger support via `hassio.addon_stdin` -- the addon now always
+  listens for commands (sync/trigger/pull) on stdin, enabling HA automations
+  to trigger git sync without exposing extra ports
+- Addon now always stays alive (no more exiting after one-shot sync) so it
+  can receive stdin commands at any time
+- Enable `stdin: true` in addon config
+
 ## 3.3.0
 
 - Add `push_on_start` option to push local /config changes to GitHub before

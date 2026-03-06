@@ -54,7 +54,7 @@ WEBHOOK_PORT=$(bashio::config 'webhook.port')
 # Main
 ################
 
-trap 'webhook::stop 2>/dev/null; utils::cleanup-on-exit' EXIT
+trap 'stdin::stop 2>/dev/null; webhook::stop 2>/dev/null; utils::cleanup-on-exit' EXIT
 
 git config --global pull.rebase false
 
@@ -120,6 +120,8 @@ if [ "$PUSH_ON_START" == "true" ]; then
     fi
 fi
 
+stdin::start
+
 if [ "$WEBHOOK_ENABLED" == "true" ]; then
     log::info "Webhook: enabled on port ${WEBHOOK_PORT}"
     if [ -n "$WEBHOOK_SECRET" ] && [ "$WEBHOOK_SECRET" != "null" ]; then
@@ -162,36 +164,29 @@ function run::do-sync {
 run::do-sync || exit 0
 
 if [ "$REPEAT_ACTIVE" != "true" ] && [ "$WEBHOOK_ENABLED" != "true" ]; then
-    exit 0
+    log::info "No repeat or webhook configured -- waiting for stdin triggers (hassio.addon_stdin)"
 fi
 
 while true; do
-    if [ "$WEBHOOK_ENABLED" == "true" ]; then
-        local_interval=5
-        if [ "$REPEAT_ACTIVE" == "true" ]; then
-            elapsed=0
-            while [ "$elapsed" -lt "$REPEAT_INTERVAL" ]; do
-                if webhook::triggered; then
-                    log::info "Webhook trigger received -- starting sync"
-                    run::do-sync || true
-                fi
-                sleep "$local_interval"
-                elapsed=$((elapsed + local_interval))
-            done
-            log::info "Polling interval reached -- starting scheduled sync"
-            run::do-sync || true
-        else
-            while true; do
-                if webhook::triggered; then
-                    log::info "Webhook trigger received -- starting sync"
-                    run::do-sync || true
-                fi
-                sleep "$local_interval"
-            done
-        fi
-    else
-        log::info "Next sync in ${REPEAT_INTERVAL} seconds"
-        sleep "$REPEAT_INTERVAL"
+    if webhook::triggered; then
+        log::info "Trigger received -- starting sync"
         run::do-sync || true
+    fi
+
+    if [ "$REPEAT_ACTIVE" == "true" ]; then
+        local_interval=5
+        elapsed=0
+        while [ "$elapsed" -lt "$REPEAT_INTERVAL" ]; do
+            if webhook::triggered; then
+                log::info "Trigger received -- starting sync"
+                run::do-sync || true
+            fi
+            sleep "$local_interval"
+            elapsed=$((elapsed + local_interval))
+        done
+        log::info "Polling interval reached -- starting scheduled sync"
+        run::do-sync || true
+    else
+        sleep 5
     fi
 done
