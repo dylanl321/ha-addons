@@ -29,6 +29,7 @@ function backup::create {
     local backup_size
     backup_size=$(du -sh "${backup_location}" | cut -f1)
     log::info "Backup complete: ${backup_location} (${backup_size})"
+    events::emit "backup_created" "path" "$backup_location" "size" "$backup_size"
     echo "${backup_location}"
     return 0
 }

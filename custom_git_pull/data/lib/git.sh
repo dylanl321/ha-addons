@@ -159,8 +159,10 @@ function git::deploy {
         local change_count
         change_count=$(echo "$rsync_output" | wc -l)
         log::info "Deployed ${change_count} file change(s) to /config"
+        events::emit "deploy_complete" "changes" "$change_count"
     else
         log::info "No file changes to deploy"
+        events::emit "deploy_complete" "changes" "0"
     fi
 
     return 0
@@ -198,6 +200,7 @@ function git::clone {
     fi
     NEW_COMMIT=$(cd "$STAGING_DIR" && git rev-parse HEAD)
     log::info "Initial clone deployed at commit: ${NEW_COMMIT}"
+    events::emit "clone_complete" "commit" "$NEW_COMMIT"
 
     return 0
 }
@@ -321,6 +324,7 @@ function git::validate-config {
 
     if ! bashio::core.check; then
         log::error "Configuration check FAILED after deploy"
+        events::emit "config_invalid"
 
         if [ -n "${DEPLOY_BACKUP:-}" ] && [ -d "${DEPLOY_BACKUP:-}" ]; then
             log::warning "Rolling back /config to pre-deploy state..."
@@ -333,6 +337,7 @@ function git::validate-config {
     fi
 
     log::info "Configuration check passed"
+    events::emit "config_valid"
 
     if [ "$AUTO_RESTART" != "true" ]; then
         log::info "Local configuration has changed. Manual restart required."
@@ -378,6 +383,7 @@ function git::validate-config {
 
     if [ "$do_restart" == "true" ]; then
         log::info "Restarting Home Assistant"
+        events::emit "ha_restarted"
         bashio::core.restart
     else
         log::info "No restart required -- only ignored files changed"
@@ -442,6 +448,7 @@ Auto-committed by Custom Git Pull addon (push_custom_components)."; then
     fi
 
     log::info "push_custom_components: successfully pushed custom_components/ changes to remote"
+    events::emit "push_completed" "target" "custom_components"
     return 0
 }
 
@@ -510,5 +517,6 @@ Auto-committed by Custom Git Pull addon (push_on_start)."; then
     fi
 
     log::info "push_on_start: successfully pushed local /config changes to GitHub"
+    events::emit "push_completed" "target" "push_on_start"
     return 0
 }

@@ -1,0 +1,1306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Custom Git Pull</title>
+<style>
+/* ===== CSS Variables / Theme ===== */
+:root {
+  --primary: #4fc3f7;
+  --primary-dark: #0397d6;
+  --primary-bg: #e1f5fe;
+  --bg: #f0f2f5;
+  --card: #ffffff;
+  --text: #1a1a2e;
+  --text-sec: #6b7280;
+  --border: #e5e7eb;
+  --success: #10b981;
+  --success-bg: #d1fae5;
+  --warning: #f59e0b;
+  --warning-bg: #fef3c7;
+  --error: #ef4444;
+  --error-bg: #fee2e2;
+  --info: #3b82f6;
+  --info-bg: #dbeafe;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.08);
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  --header-h: 56px;
+  --tab-h: 48px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111827;
+    --card: #1f2937;
+    --text: #f3f4f6;
+    --text-sec: #9ca3af;
+    --border: #374151;
+    --primary-bg: #1e3a5f;
+    --success-bg: #064e3b;
+    --warning-bg: #78350f;
+    --error-bg: #7f1d1d;
+    --info-bg: #1e3a5f;
+    --shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+}
+
+/* ===== Reset & Base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+a { color: var(--primary-dark); text-decoration: none; }
+button {
+  font-family: var(--font);
+  font-size: 14px;
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+input, select, textarea {
+  font-family: var(--font);
+  font-size: 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+textarea { resize: vertical; font-family: var(--mono); font-size: 13px; }
+
+/* ===== Layout ===== */
+.header {
+  height: var(--header-h);
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 12px;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  box-shadow: var(--shadow);
+}
+.header-title {
+  font-size: 18px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.header-title svg { width: 24px; height: 24px; color: var(--primary); }
+.header-spacer { flex: 1; }
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-sec);
+}
+.status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--text-sec);
+}
+.status-dot.idle { background: var(--success); }
+.status-dot.syncing { background: var(--primary); animation: pulse 1s infinite; }
+.status-dot.error { background: var(--error); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+.btn-primary {
+  background: var(--primary-dark);
+  color: white;
+}
+.btn-primary:hover { background: #027ab5; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.btn-outline:hover { background: var(--bg); }
+.btn-danger { background: var(--error); color: white; }
+.btn-danger:hover { background: #dc2626; }
+.btn-sm { padding: 5px 12px; font-size: 13px; }
+.btn-icon {
+  background: none; padding: 6px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.btn-icon:hover { background: var(--bg); }
+
+.tabs {
+  position: fixed;
+  top: var(--header-h);
+  left: 0; right: 0;
+  height: var(--tab-h);
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  z-index: 99;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.tab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 20px; height: 100%;
+  font-size: 13px; font-weight: 500;
+  color: var(--text-sec);
+  border-bottom: 2px solid transparent;
+  cursor: pointer; white-space: nowrap;
+  transition: all 0.15s;
+  background: none;
+  border-radius: 0;
+}
+.tab:hover { color: var(--text); background: var(--bg); }
+.tab.active { color: var(--primary-dark); border-bottom-color: var(--primary-dark); }
+.tab svg { width: 18px; height: 18px; }
+
+.content {
+  position: fixed;
+  top: calc(var(--header-h) + var(--tab-h));
+  left: 0; right: 0; bottom: 0;
+  overflow-y: auto;
+  padding: 20px;
+}
+.content-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* ===== Cards ===== */
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+.card-header {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-sec);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card-header svg { width: 16px; height: 16px; }
+
+/* ===== Dashboard ===== */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.stat-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+.stat-label { font-size: 12px; color: var(--text-sec); font-weight: 500; text-transform: uppercase; letter-spacing: 0.3px; }
+.stat-value { font-size: 28px; font-weight: 700; margin: 4px 0; }
+.stat-sub { font-size: 12px; color: var(--text-sec); }
+
+.git-info {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.git-field label {
+  font-size: 12px;
+  color: var(--text-sec);
+  font-weight: 500;
+  display: block;
+  margin-bottom: 2px;
+}
+.git-field .val {
+  font-family: var(--mono);
+  font-size: 13px;
+  word-break: break-all;
+}
+.commit-list {
+  list-style: none;
+  margin-top: 12px;
+}
+.commit-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  display: flex;
+  gap: 8px;
+}
+.commit-list li:last-child { border-bottom: none; }
+.commit-hash {
+  font-family: var(--mono);
+  color: var(--primary-dark);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.commit-msg { color: var(--text-sec); }
+
+/* ===== History ===== */
+.event-list { list-style: none; }
+.event-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: flex-start;
+}
+.event-item:last-child { border-bottom: none; }
+.event-icon {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  font-size: 14px;
+}
+.event-icon.success { background: var(--success-bg); color: var(--success); }
+.event-icon.error { background: var(--error-bg); color: var(--error); }
+.event-icon.info { background: var(--info-bg); color: var(--info); }
+.event-icon.warning { background: var(--warning-bg); color: var(--warning); }
+.event-body { flex: 1; min-width: 0; }
+.event-title { font-weight: 500; font-size: 14px; }
+.event-detail { font-size: 13px; color: var(--text-sec); margin-top: 2px; }
+.event-detail code { font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+.event-time { font-size: 12px; color: var(--text-sec); white-space: nowrap; flex-shrink: 0; }
+.event-filters {
+  display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.filter-btn {
+  padding: 4px 12px; font-size: 12px; border-radius: 16px;
+  border: 1px solid var(--border); background: var(--card); color: var(--text-sec);
+  cursor: pointer; transition: all 0.15s;
+}
+.filter-btn:hover, .filter-btn.active { background: var(--primary-bg); color: var(--primary-dark); border-color: var(--primary); }
+
+/* ===== Backups ===== */
+.backup-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.backup-card:last-child { border-bottom: none; }
+.backup-icon {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  background: var(--info-bg);
+  color: var(--info);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.backup-info { flex: 1; min-width: 0; }
+.backup-name { font-weight: 500; font-size: 14px; word-break: break-all; }
+.backup-meta { font-size: 12px; color: var(--text-sec); margin-top: 2px; }
+
+/* ===== Logs ===== */
+.log-controls {
+  display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap;
+}
+.log-viewer {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 16px;
+  border-radius: var(--radius);
+  overflow: auto;
+  height: calc(100vh - 300px);
+  min-height: 300px;
+  white-space: pre;
+  tab-size: 4;
+}
+.log-viewer .info { color: #89b4fa; }
+.log-viewer .warn { color: #f9e2af; }
+.log-viewer .error { color: #f38ba8; }
+.log-viewer .fatal { color: #f38ba8; font-weight: bold; }
+.log-viewer .ts { color: #6c7086; }
+
+/* ===== Settings ===== */
+.settings-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  background: var(--card);
+  overflow: hidden;
+}
+.settings-section-header {
+  padding: 14px 20px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+  transition: background 0.15s;
+}
+.settings-section-header:hover { background: var(--bg); }
+.settings-section-header .chevron {
+  transition: transform 0.2s;
+  color: var(--text-sec);
+}
+.settings-section.open .chevron { transform: rotate(180deg); }
+.settings-section-body {
+  display: none;
+  padding: 0 20px 20px;
+}
+.settings-section.open .settings-section-body { display: block; }
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  gap: 16px;
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-label { flex: 1; }
+.setting-label .name { font-weight: 500; font-size: 14px; }
+.setting-label .desc { font-size: 12px; color: var(--text-sec); margin-top: 2px; }
+.setting-control { flex-shrink: 0; }
+.setting-control input[type="text"],
+.setting-control input[type="number"],
+.setting-control input[type="password"],
+.setting-control select { width: 240px; }
+.setting-control textarea { width: 400px; max-width: 100%; }
+
+/* Toggle switch */
+.toggle {
+  position: relative;
+  width: 44px; height: 24px;
+  background: var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.toggle.on { background: var(--success); }
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 20px; height: 20px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.toggle.on::after { transform: translateX(20px); }
+
+.settings-actions {
+  display: flex; gap: 8px; margin-top: 16px; align-items: center;
+}
+.unsaved-badge {
+  font-size: 12px;
+  color: var(--warning);
+  font-weight: 500;
+  display: none;
+}
+.unsaved-badge.show { display: inline; }
+.restart-banner {
+  display: none;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  padding: 12px 20px;
+  margin-bottom: 16px;
+  align-items: center;
+  gap: 12px;
+}
+.restart-banner.show { display: flex; }
+.restart-banner-text { flex: 1; font-size: 14px; }
+
+/* SSH key section */
+.key-status {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.key-status.valid { background: var(--success-bg); color: var(--success); }
+.key-status.invalid { background: var(--error-bg); color: var(--error); }
+.key-status.none { background: var(--bg); color: var(--text-sec); }
+
+/* ===== Toasts ===== */
+.toast-container {
+  position: fixed;
+  bottom: 20px; right: 20px;
+  z-index: 1000;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.toast {
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: white;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  transform: translateX(120%);
+  transition: transform 0.3s;
+  max-width: 360px;
+}
+.toast.show { transform: translateX(0); }
+.toast-success { background: var(--success); }
+.toast-error { background: var(--error); }
+.toast-info { background: var(--info); }
+.toast-warning { background: var(--warning); }
+
+/* ===== Empty state ===== */
+.empty {
+  text-align: center; padding: 48px 20px;
+  color: var(--text-sec);
+}
+.empty svg { width: 48px; height: 48px; margin-bottom: 12px; opacity: 0.4; }
+.empty-title { font-size: 16px; font-weight: 500; margin-bottom: 4px; color: var(--text); }
+.empty-desc { font-size: 13px; }
+
+/* ===== Responsive ===== */
+@media (max-width: 640px) {
+  .header { padding: 0 12px; }
+  .header-title { font-size: 16px; }
+  .content { padding: 12px; }
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+  .git-info { grid-template-columns: 1fr; }
+  .setting-row { flex-direction: column; align-items: flex-start; }
+  .setting-control { width: 100%; }
+  .setting-control input, .setting-control select, .setting-control textarea { width: 100%; }
+  .tab { padding: 0 14px; font-size: 12px; }
+}
+
+/* ===== Utilities ===== */
+.hidden { display: none !important; }
+.mt-8 { margin-top: 8px; }
+.mt-16 { margin-top: 16px; }
+.mb-16 { margin-bottom: 16px; }
+.text-sec { color: var(--text-sec); }
+.text-sm { font-size: 13px; }
+.text-mono { font-family: var(--mono); }
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.badge-success { background: var(--success-bg); color: var(--success); }
+.badge-error { background: var(--error-bg); color: var(--error); }
+.badge-info { background: var(--info-bg); color: var(--info); }
+.badge-warning { background: var(--warning-bg); color: var(--warning); }
+.loading-spinner {
+  display: inline-block;
+  width: 16px; height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.confirm-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200;
+}
+.confirm-dialog {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 24px;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+}
+.confirm-dialog h3 { margin-bottom: 8px; }
+.confirm-dialog p { color: var(--text-sec); margin-bottom: 20px; font-size: 14px; }
+.confirm-dialog .actions { display: flex; gap: 8px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+
+<!-- ===== Header ===== -->
+<div class="header">
+  <div class="header-title">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65S8.93 17.38 9 18v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
+    Custom Git Pull
+  </div>
+  <div class="header-spacer"></div>
+  <div class="header-status">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">Loading...</span>
+  </div>
+  <button class="btn-primary btn-sm" id="syncBtn" onclick="App.triggerSync()">
+    <span id="syncBtnText">Sync Now</span>
+  </button>
+</div>
+
+<!-- ===== Tabs ===== -->
+<div class="tabs" id="tabs">
+  <div class="tab active" data-tab="dashboard">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    Dashboard
+  </div>
+  <div class="tab" data-tab="history">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    History
+  </div>
+  <div class="tab" data-tab="backups">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+    Backups
+  </div>
+  <div class="tab" data-tab="logs">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+    Logs
+  </div>
+  <div class="tab" data-tab="settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+    Settings
+  </div>
+</div>
+
+<!-- ===== Content ===== -->
+<div class="content">
+<div class="content-inner">
+
+  <!-- Dashboard Panel -->
+  <div class="panel active" id="panel-dashboard">
+    <div class="stats-grid" id="statsGrid"></div>
+    <div class="card">
+      <div class="card-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        Repository Info
+      </div>
+      <div class="git-info" id="gitInfo"></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Recent Commits
+      </div>
+      <ul class="commit-list" id="commitList"></ul>
+    </div>
+  </div>
+
+  <!-- History Panel -->
+  <div class="panel" id="panel-history">
+    <div class="card">
+      <div class="card-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Sync History
+      </div>
+      <div class="event-filters" id="eventFilters"></div>
+      <ul class="event-list" id="eventList"></ul>
+    </div>
+  </div>
+
+  <!-- Backups Panel -->
+  <div class="panel" id="panel-backups">
+    <div class="card">
+      <div class="card-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+        Backups
+      </div>
+      <div id="backupList"></div>
+    </div>
+  </div>
+
+  <!-- Logs Panel -->
+  <div class="panel" id="panel-logs">
+    <div class="log-controls">
+      <button class="btn-outline btn-sm" onclick="App.refreshLogs()">Refresh</button>
+      <button class="btn-outline btn-sm" id="autoScrollBtn" onclick="App.toggleAutoScroll()">Auto-scroll: ON</button>
+      <div class="header-spacer"></div>
+      <input type="text" id="logSearch" placeholder="Filter logs..." style="width: 200px" oninput="App.filterLogs()">
+    </div>
+    <div class="log-viewer" id="logViewer"></div>
+  </div>
+
+  <!-- Settings Panel -->
+  <div class="panel" id="panel-settings">
+    <div class="restart-banner" id="restartBanner">
+      <span class="restart-banner-text">Settings have been saved. Restart the addon to apply changes.</span>
+      <button class="btn-primary btn-sm" onclick="App.restartAddon()">Restart Now</button>
+    </div>
+    <div id="settingsForm"></div>
+    <div class="settings-actions">
+      <button class="btn-primary" id="saveSettingsBtn" onclick="App.saveSettings()">Save Settings</button>
+      <span class="unsaved-badge" id="unsavedBadge">Unsaved changes</span>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<!-- ===== Toast Container ===== -->
+<div class="toast-container" id="toasts"></div>
+
+<!-- ===== Confirm Dialog (hidden) ===== -->
+<div class="confirm-overlay hidden" id="confirmOverlay">
+  <div class="confirm-dialog">
+    <h3 id="confirmTitle">Confirm</h3>
+    <p id="confirmMessage">Are you sure?</p>
+    <div class="actions">
+      <button class="btn-outline btn-sm" onclick="App.confirmCancel()">Cancel</button>
+      <button class="btn-danger btn-sm" id="confirmOkBtn" onclick="App.confirmOk()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const INGRESS = '{{INGRESS_PATH}}';
+const BASE = INGRESS ? INGRESS + '/' : './';
+
+const App = {
+  state: {
+    tab: 'dashboard',
+    status: {},
+    events: [],
+    backups: [],
+    logLines: [],
+    config: {},
+    configDirty: false,
+    configEdits: {},
+    autoScroll: true,
+    eventFilter: 'all',
+    logFilter: '',
+    refreshTimer: null,
+    confirmResolve: null,
+  },
+
+  async init() {
+    this.bindTabs();
+    await this.refresh();
+    this.state.refreshTimer = setInterval(() => this.refresh(), 8000);
+  },
+
+  // ---- Networking ----
+  async api(path, opts = {}) {
+    const url = BASE + path;
+    try {
+      const res = await fetch(url, {
+        ...opts,
+        headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      });
+      return await res.json();
+    } catch (e) {
+      console.error('API error:', path, e);
+      return null;
+    }
+  },
+
+  async refresh() {
+    const [status, events, backups] = await Promise.all([
+      this.api('api/status'),
+      this.api('api/events?limit=200'),
+      this.api('api/backups'),
+    ]);
+    if (status) this.state.status = status;
+    if (events) this.state.events = events;
+    if (backups) this.state.backups = backups;
+    this.render();
+    if (this.state.tab === 'logs') this.refreshLogs();
+  },
+
+  // ---- Tabs ----
+  bindTabs() {
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        this.state.tab = tab.dataset.tab;
+        document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
+        document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + this.state.tab));
+        if (this.state.tab === 'logs') this.refreshLogs();
+        if (this.state.tab === 'settings' && !Object.keys(this.state.config).length) this.loadConfig();
+      });
+    });
+  },
+
+  // ---- Render ----
+  render() {
+    this.renderHeader();
+    this.renderDashboard();
+    this.renderHistory();
+    this.renderBackups();
+  },
+
+  renderHeader() {
+    const s = this.state.status;
+    const dot = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    dot.className = 'status-dot ' + (s.state || 'idle');
+    if (s.state === 'syncing') {
+      text.textContent = 'Syncing...';
+    } else if (s.last_sync) {
+      const t = s.last_sync.type === 'sync_complete' ? 'Last sync: ' : 'Last sync failed: ';
+      text.textContent = t + timeAgo(s.last_sync.ts);
+      if (s.last_sync.type === 'sync_failed') dot.classList.add('error');
+    } else {
+      text.textContent = 'No syncs yet';
+    }
+  },
+
+  renderDashboard() {
+    const s = this.state.status;
+    const stats = s.stats || {};
+
+    document.getElementById('statsGrid').innerHTML = `
+      <div class="stat-card">
+        <div class="stat-label">Status</div>
+        <div class="stat-value" style="color: var(--${s.state === 'syncing' ? 'primary' : 'success'})">${s.state === 'syncing' ? 'Syncing' : 'Idle'}</div>
+        <div class="stat-sub">${s.last_sync ? timeAgo(s.last_sync.ts) : 'Never synced'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Syncs</div>
+        <div class="stat-value">${stats.total_syncs || 0}</div>
+        <div class="stat-sub">${stats.successful || 0} successful, ${stats.failed || 0} failed</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Current Commit</div>
+        <div class="stat-value text-mono" style="font-size:20px">${s.commit || '---'}</div>
+        <div class="stat-sub">${s.branch ? 'on ' + esc(s.branch) : 'No branch'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Backups</div>
+        <div class="stat-value">${this.state.backups.length}</div>
+        <div class="stat-sub">Available for restore</div>
+      </div>
+    `;
+
+    document.getElementById('gitInfo').innerHTML = `
+      <div class="git-field"><label>Repository</label><div class="val">${esc(s.repo || 'Not configured')}</div></div>
+      <div class="git-field"><label>Branch</label><div class="val">${esc(s.branch || s.configured_branch || '---')}</div></div>
+      <div class="git-field"><label>Last Commit</label><div class="val">${esc(s.commit_message || '---')}</div></div>
+      <div class="git-field"><label>Author</label><div class="val">${esc(s.commit_author || '---')}</div></div>
+      <div class="git-field"><label>Commit SHA</label><div class="val">${esc(s.commit_full || '---')}</div></div>
+      <div class="git-field"><label>Commit Date</label><div class="val">${s.commit_date ? new Date(s.commit_date).toLocaleString() : '---'}</div></div>
+    `;
+
+    const commits = s.recent_commits || [];
+    if (commits.length) {
+      document.getElementById('commitList').innerHTML = commits.map(c =>
+        `<li><span class="commit-hash">${esc(c.hash)}</span><span class="commit-msg">${esc(c.message)}</span></li>`
+      ).join('');
+    } else {
+      document.getElementById('commitList').innerHTML = '<li class="text-sec">No commits found</li>';
+    }
+  },
+
+  renderHistory() {
+    const filters = [
+      { key: 'all', label: 'All' },
+      { key: 'sync', label: 'Syncs' },
+      { key: 'backup', label: 'Backups' },
+      { key: 'deploy', label: 'Deploys' },
+      { key: 'webhook', label: 'Webhooks' },
+    ];
+    document.getElementById('eventFilters').innerHTML = filters.map(f =>
+      `<span class="filter-btn ${this.state.eventFilter === f.key ? 'active' : ''}" onclick="App.setEventFilter('${f.key}')">${f.label}</span>`
+    ).join('');
+
+    let events = [...this.state.events].reverse();
+    if (this.state.eventFilter !== 'all') {
+      events = events.filter(e => e.type && e.type.startsWith(this.state.eventFilter));
+    }
+
+    if (!events.length) {
+      document.getElementById('eventList').innerHTML = `
+        <div class="empty">
+          <div class="empty-title">No events yet</div>
+          <div class="empty-desc">Events will appear here after the first sync</div>
+        </div>`;
+      return;
+    }
+
+    document.getElementById('eventList').innerHTML = events.slice(0, 100).map(e => {
+      const meta = eventMeta(e);
+      return `
+        <li class="event-item">
+          <div class="event-icon ${meta.color}">${meta.icon}</div>
+          <div class="event-body">
+            <div class="event-title">${meta.title}</div>
+            <div class="event-detail">${meta.detail}</div>
+          </div>
+          <div class="event-time">${timeAgo(e.ts)}</div>
+        </li>`;
+    }).join('');
+  },
+
+  setEventFilter(f) {
+    this.state.eventFilter = f;
+    this.renderHistory();
+  },
+
+  renderBackups() {
+    const bk = this.state.backups;
+    if (!bk.length) {
+      document.getElementById('backupList').innerHTML = `
+        <div class="empty">
+          <div class="empty-title">No backups</div>
+          <div class="empty-desc">Backups are created automatically before each deploy</div>
+        </div>`;
+      return;
+    }
+    document.getElementById('backupList').innerHTML = bk.map(b => `
+      <div class="backup-card">
+        <div class="backup-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+        </div>
+        <div class="backup-info">
+          <div class="backup-name">${esc(b.name)}</div>
+          <div class="backup-meta">${b.size} &middot; ${new Date(b.timestamp * 1000).toLocaleString()}</div>
+        </div>
+        <button class="btn-outline btn-sm" onclick="App.restoreBackup('${esc(b.path)}', '${esc(b.name)}')">Restore</button>
+      </div>
+    `).join('');
+  },
+
+  // ---- Logs ----
+  async refreshLogs() {
+    const data = await this.api('api/log?lines=500');
+    if (!data) return;
+    this.state.logLines = data.lines || [];
+    this.renderLogs();
+  },
+
+  renderLogs() {
+    const viewer = document.getElementById('logViewer');
+    const filter = this.state.logFilter.toLowerCase();
+    let lines = this.state.logLines;
+    if (filter) lines = lines.filter(l => l.toLowerCase().includes(filter));
+
+    viewer.innerHTML = lines.map(line => {
+      const el = esc(line);
+      let cls = '';
+      if (line.includes('[FATAL]')) cls = 'fatal';
+      else if (line.includes('[ERROR]')) cls = 'error';
+      else if (line.includes('[WARN]')) cls = 'warn';
+      else if (line.includes('[INFO]')) cls = 'info';
+
+      // Color timestamp
+      const tsMatch = el.match(/^(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\])/);
+      if (tsMatch) {
+        return `<span class="${cls}"><span class="ts">${tsMatch[1]}</span>${el.slice(tsMatch[1].length)}</span>\n`;
+      }
+      return cls ? `<span class="${cls}">${el}</span>\n` : el + '\n';
+    }).join('');
+
+    if (this.state.autoScroll) viewer.scrollTop = viewer.scrollHeight;
+  },
+
+  filterLogs() {
+    this.state.logFilter = document.getElementById('logSearch').value;
+    this.renderLogs();
+  },
+
+  toggleAutoScroll() {
+    this.state.autoScroll = !this.state.autoScroll;
+    document.getElementById('autoScrollBtn').textContent = 'Auto-scroll: ' + (this.state.autoScroll ? 'ON' : 'OFF');
+  },
+
+  // ---- Settings ----
+  async loadConfig() {
+    const config = await this.api('api/config');
+    if (!config || config.error) return;
+    this.state.config = config;
+    this.state.configEdits = JSON.parse(JSON.stringify(config));
+    this.state.configDirty = false;
+    this.renderSettings();
+  },
+
+  renderSettings() {
+    const c = this.state.configEdits;
+    const sections = [
+      {
+        title: 'Repository',
+        id: 'repo',
+        open: true,
+        fields: [
+          { key: 'repository', label: 'Repository URL', desc: 'Git URL (SSH or HTTPS)', type: 'text' },
+          { key: 'git_branch', label: 'Branch', desc: 'Branch to track', type: 'text' },
+          { key: 'git_remote', label: 'Remote', desc: 'Git remote name', type: 'text' },
+          { key: 'git_command', label: 'Git Command', desc: 'pull = merge, reset = hard reset', type: 'select', options: ['pull', 'reset'] },
+        ]
+      },
+      {
+        title: 'Sync Behavior',
+        id: 'sync',
+        fields: [
+          { key: 'auto_restart', label: 'Auto Restart', desc: 'Restart HA when config changes and is valid', type: 'toggle' },
+          { key: 'push_on_start', label: 'Push on Start', desc: 'Push local /config changes to git before pulling', type: 'toggle' },
+          { key: 'push_custom_components', label: 'Push Custom Components', desc: 'Sync custom_components/ back to git after each pull', type: 'toggle' },
+          { key: 'git_prune', label: 'Git Prune', desc: 'Clean up deleted remote branches', type: 'toggle' },
+          { key: 'restart_ignore', label: 'Restart Ignore', desc: 'Files that should not trigger a restart (comma-separated)', type: 'list' },
+        ]
+      },
+      {
+        title: 'Deploy Safety',
+        id: 'deploy',
+        fields: [
+          { key: 'deploy_delete', label: 'Mirror Mode (Delete)', desc: 'Remove files from /config not in the repo. Use with caution.', type: 'toggle', danger: true },
+          { key: 'deploy_dry_run', label: 'Dry Run', desc: 'Preview changes without modifying /config', type: 'toggle' },
+          { key: 'mirror_protect_user_dirs', label: 'Protect User Dirs', desc: 'Exclude www/ and python_scripts/ from deploy', type: 'toggle' },
+          { key: 'allow_legacy_config_git_dir', label: 'Allow Legacy .git', desc: 'Allow mirror-mode even if /config/.git exists', type: 'toggle' },
+        ]
+      },
+      {
+        title: 'Schedule',
+        id: 'schedule',
+        fields: [
+          { key: 'repeat.active', label: 'Polling Enabled', desc: 'Periodically check for updates', type: 'toggle' },
+          { key: 'repeat.interval', label: 'Poll Interval', desc: 'Seconds between polls', type: 'number', min: 30 },
+        ]
+      },
+      {
+        title: 'Webhook',
+        id: 'webhook',
+        fields: [
+          { key: 'webhook.enabled', label: 'Webhook Enabled', desc: 'Listen for GitHub push webhooks', type: 'toggle' },
+          { key: 'webhook.port', label: 'Webhook Port', desc: 'TCP port for the webhook listener', type: 'number', min: 1024, max: 65535 },
+          { key: 'webhook.secret', label: 'Webhook Secret', desc: 'HMAC-SHA256 shared secret', type: 'password', hasValue: c._has_webhook_secret },
+        ]
+      },
+      {
+        title: 'Authentication',
+        id: 'auth',
+        fields: [
+          { key: 'deployment_user', label: 'Username', desc: 'For HTTPS authentication', type: 'text' },
+          { key: 'deployment_password', label: 'Password', desc: 'For HTTPS authentication', type: 'password', hasValue: c._has_password },
+          { key: 'deployment_key_protocol', label: 'Key Protocol', desc: 'SSH key type', type: 'select', options: ['rsa', 'ed25519', 'ecdsa', 'dsa'] },
+          { key: 'deployment_key', label: 'SSH Deploy Key', desc: 'Paste your full private key here. The addon handles formatting automatically.', type: 'sshkey', hasValue: c._has_key },
+        ]
+      },
+    ];
+
+    document.getElementById('settingsForm').innerHTML = sections.map(sec => `
+      <div class="settings-section ${sec.open ? 'open' : ''}" id="sec-${sec.id}">
+        <div class="settings-section-header" onclick="App.toggleSection('${sec.id}')">
+          ${sec.title}
+          <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="settings-section-body">
+          ${sec.fields.map(f => this.renderSettingField(f, c)).join('')}
+        </div>
+      </div>
+    `).join('');
+
+    this.updateUnsaved();
+  },
+
+  renderSettingField(field, config) {
+    const val = getNestedVal(config, field.key);
+    let control = '';
+
+    switch (field.type) {
+      case 'toggle':
+        control = `<div class="toggle ${val ? 'on' : ''} ${field.danger ? 'danger' : ''}" onclick="App.toggleSetting('${field.key}', this)"></div>`;
+        break;
+      case 'text':
+        control = `<input type="text" value="${esc(val || '')}" onchange="App.updateSetting('${field.key}', this.value)">`;
+        break;
+      case 'number':
+        control = `<input type="number" value="${val || ''}" min="${field.min || ''}" max="${field.max || ''}" onchange="App.updateSetting('${field.key}', parseInt(this.value))">`;
+        break;
+      case 'password':
+        control = `<input type="password" value="${esc(val || '')}" placeholder="${field.hasValue ? '(configured - leave blank to keep)' : '(not set)'}" onchange="App.updateSetting('${field.key}', this.value)">`;
+        break;
+      case 'select':
+        control = `<select onchange="App.updateSetting('${field.key}', this.value)">${
+          field.options.map(o => `<option value="${o}" ${val === o ? 'selected' : ''}>${o}</option>`).join('')
+        }</select>`;
+        break;
+      case 'list':
+        const listVal = Array.isArray(val) ? val.join(', ') : (val || '');
+        control = `<input type="text" value="${esc(listVal)}" placeholder="file1.yaml, dir/" onchange="App.updateSetting('${field.key}', this.value.split(',').map(s=>s.trim()).filter(Boolean))">`;
+        break;
+      case 'sshkey':
+        control = `
+          <div>
+            <textarea rows="6" placeholder="${field.hasValue ? 'Key is configured. Paste a new key to replace it, or leave blank to keep current.' : 'Paste your SSH private key here...'}"
+              onchange="App.updateSSHKey(this.value)" oninput="App.validateKeyLive(this.value)"
+              id="sshKeyInput"></textarea>
+            <div class="key-status none mt-8" id="keyStatus">
+              ${field.hasValue ? 'SSH key is configured' : 'No SSH key configured'}
+            </div>
+          </div>`;
+        break;
+    }
+
+    return `
+      <div class="setting-row">
+        <div class="setting-label">
+          <div class="name">${field.label}</div>
+          <div class="desc">${field.desc}</div>
+        </div>
+        <div class="setting-control">${control}</div>
+      </div>`;
+  },
+
+  toggleSection(id) {
+    document.getElementById('sec-' + id).classList.toggle('open');
+  },
+
+  toggleSetting(key, el) {
+    const current = getNestedVal(this.state.configEdits, key);
+    setNestedVal(this.state.configEdits, key, !current);
+    el.classList.toggle('on');
+    this.state.configDirty = true;
+    this.updateUnsaved();
+  },
+
+  updateSetting(key, value) {
+    setNestedVal(this.state.configEdits, key, value);
+    this.state.configDirty = true;
+    this.updateUnsaved();
+  },
+
+  updateSSHKey(value) {
+    if (value.trim()) {
+      const lines = value.trim().split('\n').map(l => l.trim());
+      this.state.configEdits.deployment_key = lines.length === 1 ? [lines[0]] : lines;
+    }
+    this.state.configDirty = true;
+    this.updateUnsaved();
+  },
+
+  async validateKeyLive(value) {
+    const el = document.getElementById('keyStatus');
+    if (!value.trim()) {
+      el.className = 'key-status none mt-8';
+      el.textContent = this.state.config._has_key ? 'SSH key is configured (paste to replace)' : 'No SSH key configured';
+      return;
+    }
+    el.className = 'key-status none mt-8';
+    el.innerHTML = '<span class="loading-spinner"></span> Validating...';
+    const res = await this.api('api/validate-key', {
+      method: 'POST',
+      body: JSON.stringify({ key: value.trim() }),
+    });
+    if (!res) return;
+    if (res.valid) {
+      el.className = 'key-status valid mt-8';
+      el.textContent = 'Valid key: ' + res.fingerprint;
+    } else {
+      el.className = 'key-status invalid mt-8';
+      el.textContent = 'Invalid: ' + (res.error || 'Unknown error');
+    }
+  },
+
+  updateUnsaved() {
+    document.getElementById('unsavedBadge').classList.toggle('show', this.state.configDirty);
+  },
+
+  async saveSettings() {
+    const btn = document.getElementById('saveSettingsBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> Saving...';
+
+    const edits = this.state.configEdits;
+    const payload = {};
+
+    // Only send changed fields, skip internal flags
+    for (const key of Object.keys(edits)) {
+      if (key.startsWith('_')) continue;
+      const orig = this.state.config[key];
+      const edit = edits[key];
+      if (JSON.stringify(orig) !== JSON.stringify(edit)) {
+        // Don't send empty secrets (means "keep current")
+        if ((key === 'deployment_password' || key === 'deployment_key') && !edit) continue;
+        if (key === 'deployment_key' && Array.isArray(edit) && !edit.length) continue;
+        if (key === 'webhook' && edit.secret === '' && this.state.config._has_webhook_secret) {
+          const cleaned = { ...edit };
+          delete cleaned.secret;
+          payload[key] = cleaned;
+          continue;
+        }
+        payload[key] = edit;
+      }
+    }
+
+    if (!Object.keys(payload).length) {
+      toast('No changes to save', 'info');
+      btn.disabled = false;
+      btn.textContent = 'Save Settings';
+      return;
+    }
+
+    const res = await this.api('api/config', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
+    btn.disabled = false;
+    btn.textContent = 'Save Settings';
+
+    if (res && res.ok) {
+      this.state.configDirty = false;
+      this.updateUnsaved();
+      toast('Settings saved', 'success');
+      if (res.restart_required) {
+        document.getElementById('restartBanner').classList.add('show');
+      }
+    } else {
+      toast('Failed to save: ' + (res?.error || 'Unknown error'), 'error');
+    }
+  },
+
+  async restartAddon() {
+    if (!await this.confirm('Restart Addon', 'The addon will restart and briefly disconnect. Continue?')) return;
+    toast('Restarting addon...', 'info');
+    await this.api('api/restart', { method: 'POST' });
+  },
+
+  // ---- Actions ----
+  async triggerSync() {
+    const btn = document.getElementById('syncBtn');
+    btn.disabled = true;
+    document.getElementById('syncBtnText').textContent = 'Syncing...';
+    const res = await this.api('api/sync', { method: 'POST' });
+    if (res && res.ok) {
+      toast('Sync triggered', 'success');
+    } else {
+      toast('Failed to trigger sync', 'error');
+    }
+    setTimeout(() => {
+      btn.disabled = false;
+      document.getElementById('syncBtnText').textContent = 'Sync Now';
+      this.refresh();
+    }, 3000);
+  },
+
+  async restoreBackup(path, name) {
+    if (!await this.confirm('Restore Backup', `Restore /config from backup "${name}"? This will overwrite current config files (protected paths are never touched).`)) return;
+    toast('Restore queued...', 'info');
+    const res = await this.api('api/restore', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    });
+    if (res && res.ok) {
+      toast('Restore triggered - check logs', 'success');
+    } else {
+      toast('Restore failed: ' + (res?.error || 'Unknown'), 'error');
+    }
+  },
+
+  // ---- Confirm dialog ----
+  confirm(title, message) {
+    document.getElementById('confirmTitle').textContent = title;
+    document.getElementById('confirmMessage').textContent = message;
+    document.getElementById('confirmOverlay').classList.remove('hidden');
+    return new Promise(resolve => { this.state.confirmResolve = resolve; });
+  },
+  confirmOk() {
+    document.getElementById('confirmOverlay').classList.add('hidden');
+    if (this.state.confirmResolve) this.state.confirmResolve(true);
+  },
+  confirmCancel() {
+    document.getElementById('confirmOverlay').classList.add('hidden');
+    if (this.state.confirmResolve) this.state.confirmResolve(false);
+  },
+};
+
+// ===== Helpers =====
+
+function esc(s) {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
+function getNestedVal(obj, key) {
+  const parts = key.split('.');
+  let v = obj;
+  for (const p of parts) {
+    if (v == null) return undefined;
+    v = v[p];
+  }
+  return v;
+}
+
+function setNestedVal(obj, key, value) {
+  const parts = key.split('.');
+  let v = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (v[parts[i]] == null) v[parts[i]] = {};
+    v = v[parts[i]];
+  }
+  v[parts[parts.length - 1]] = value;
+}
+
+function timeAgo(ts) {
+  if (!ts) return 'Never';
+  const now = Date.now() / 1000;
+  const diff = Math.floor(now - ts);
+  if (diff < 60) return 'Just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  if (diff < 172800) return 'Yesterday';
+  return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function eventMeta(e) {
+  const t = e.type || 'unknown';
+  const map = {
+    sync_start:       { icon: '&#8635;', color: 'info',    title: 'Sync Started',              detail: e.trigger ? `Triggered by ${e.trigger}` : '' },
+    sync_complete:    { icon: '&#10003;', color: 'success', title: 'Sync Complete',              detail: e.new_commit ? `<code>${(e.old_commit||'').slice(0,7)}</code> &rarr; <code>${(e.new_commit||'').slice(0,7)}</code>${e.files_changed ? ' &middot; ' + e.files_changed + ' file(s)' : ''}` : 'No changes' },
+    sync_failed:      { icon: '&#10007;', color: 'error',   title: 'Sync Failed',               detail: e.error || '' },
+    sync_requested:   { icon: '&#9654;',  color: 'info',    title: 'Sync Requested',            detail: e.trigger ? `via ${e.trigger}` : '' },
+    sync_no_changes:  { icon: '&#8226;',  color: 'info',    title: 'No Changes',                detail: 'Repository is up to date' },
+    backup_created:   { icon: '&#128230;', color: 'info',   title: 'Backup Created',            detail: e.path ? e.path.split('/').pop() + (e.size ? ` (${e.size})` : '') : '' },
+    backup_restored:  { icon: '&#8634;', color: 'warning',  title: 'Backup Restored',           detail: e.path ? 'From ' + e.path.split('/').pop() : '' },
+    deploy_start:     { icon: '&#128640;', color: 'info',   title: 'Deploy Started',            detail: '' },
+    deploy_complete:  { icon: '&#10003;', color: 'success', title: 'Deploy Complete',            detail: e.changes ? e.changes + ' file(s) changed' : '' },
+    config_valid:     { icon: '&#10003;', color: 'success', title: 'Config Valid',               detail: 'Home Assistant configuration check passed' },
+    config_invalid:   { icon: '&#10007;', color: 'error',   title: 'Config Invalid',             detail: 'Configuration check failed - rolled back' },
+    ha_restarted:     { icon: '&#8635;', color: 'warning',  title: 'HA Restarted',              detail: 'Home Assistant was restarted' },
+    webhook_received: { icon: '&#128268;', color: 'info',   title: 'Webhook Received',          detail: e.event ? `GitHub ${e.event} event` + (e.branch ? ` (${e.branch})` : '') : '' },
+    push_completed:   { icon: '&#8593;', color: 'success',  title: 'Push Complete',             detail: e.target || '' },
+    clone_complete:   { icon: '&#10003;', color: 'success', title: 'Initial Clone',             detail: e.commit ? `at <code>${(e.commit||'').slice(0,7)}</code>` : '' },
+  };
+  return map[t] || { icon: '&#8226;', color: 'info', title: t.replace(/_/g, ' '), detail: JSON.stringify(e) };
+}
+
+function toast(message, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = message;
+  document.getElementById('toasts').appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 300);
+  }, 3500);
+}
+
+// ===== Init =====
+document.addEventListener('DOMContentLoaded', () => App.init());
+</script>
+</body>
+</html>

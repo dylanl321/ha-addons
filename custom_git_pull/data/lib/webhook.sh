@@ -107,6 +107,10 @@ function webhook::handle-request {
 
             touch "$WEBHOOK_TRIGGER_FILE"
             log::info "Webhook: sync triggered"
+            # Emit event (best-effort, events.sh may not be sourced in socat subprocess)
+            local _evt_ts
+            _evt_ts=$(date +%s)
+            echo "{\"ts\":${_evt_ts},\"type\":\"webhook_received\",\"event\":\"push\",\"branch\":\"${branch:-unknown}\"}" >> /data/events.jsonl 2>/dev/null || true
             printf "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"ok\":true,\"event\":\"push\",\"triggered\":true}\n"
             ;;
         *)
@@ -170,6 +174,7 @@ function stdin::start {
         case "$command" in
             sync|trigger|pull)
                 log::info "Stdin trigger: received '${command}' command -- triggering sync"
+                SYNC_TRIGGER="stdin"
                 touch "$WEBHOOK_TRIGGER_FILE"
                 ;;
             status)

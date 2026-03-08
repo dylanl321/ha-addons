@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.5.0
+
+- Add interactive web UI accessible from the Home Assistant sidebar via ingress
+- Dashboard: live status, sync stats, current commit/branch, recent commits
+- History: filterable timeline of all sync events (syncs, deploys, backups,
+  restores, webhooks, HA restarts)
+- Backups: browse and restore backups directly from the UI
+- Logs: color-coded log viewer with search filtering and auto-scroll
+- Settings: full addon configuration from the web UI including toggle switches,
+  SSH key editor with live validation, schedule, webhook, and deploy settings
+- Structured event logging (JSON-lines) for all addon operations
+- Sync Now button for on-demand pulls from the UI
+- Light/dark mode support matching Home Assistant's design language
+- Responsive design for mobile and desktop
+
 ## 3.4.1
 
 - Fix push_on_start failing when remote has newer commits: now fetches and

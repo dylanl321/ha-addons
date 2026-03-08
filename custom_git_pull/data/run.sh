@@ -22,6 +22,8 @@ source /lib/ssh.sh
 source /lib/utils.sh
 # shellcheck source=lib/webhook.sh
 source /lib/webhook.sh
+# shellcheck source=lib/events.sh
+source /lib/events.sh
 
 ################
 # Load configuration
@@ -54,7 +56,7 @@ WEBHOOK_PORT=$(bashio::config 'webhook.port')
 # Main
 ################
 
-trap 'stdin::stop 2>/dev/null; webhook::stop 2>/dev/null; utils::cleanup-on-exit' EXIT
+trap 'stdin::stop 2>/dev/null; webhook::stop 2>/dev/null; kill "$WEB_SERVER_PID" 2>/dev/null; utils::cleanup-on-exit' EXIT
 
 git config --global pull.rebase false
 
@@ -62,6 +64,11 @@ cd /config || bashio::exit.nok "Failed to cd into /config"
 
 log::init
 safety::ensure-gitignore-entries
+
+# Start web UI server
+log::info "Starting web UI server on port 8099..."
+python3 /web/server.py &
+WEB_SERVER_PID=$!
 
 log::info "Repository: ${REPOSITORY}"
 log::info "Branch: ${GIT_BRANCH}"
@@ -145,16 +152,29 @@ function run::do-sync {
         OLD_COMMIT=""
         NEW_COMMIT=""
 
+        events::emit "sync_start" "trigger" "${SYNC_TRIGGER:-schedule}"
+
         if git::synchronize; then
             if [ "$DEPLOY_DRY_RUN" == "true" ]; then
                 log::info "Dry run complete. Disable deploy_dry_run to apply changes."
+                events::emit "sync_complete" "dry_run" "true"
                 utils::release-lock
                 return 1
             fi
             if [ -n "${NEW_COMMIT:-}" ] && [ "${NEW_COMMIT:-}" != "${OLD_COMMIT:-}" ]; then
+                local changed_files_list
+                changed_files_list=$(cd "$STAGING_DIR" 2>/dev/null && git diff --name-only "$OLD_COMMIT" "$NEW_COMMIT" 2>/dev/null | head -50 | tr '\n' ',' | sed 's/,$//')
+                events::emit "sync_complete" \
+                    "old_commit" "${OLD_COMMIT:-}" \
+                    "new_commit" "${NEW_COMMIT:-}" \
+                    "files_changed" "${changed_files_list:-0}"
                 git::validate-config
+            else
+                events::emit "sync_no_changes"
             fi
             git::push-local-changes
+        else
+            events::emit "sync_failed" "error" "git synchronize failed"
         fi
 
         DEPLOY_IN_PROGRESS=""
@@ -163,6 +183,26 @@ function run::do-sync {
     return 0
 }
 
+function run::check-restore-request {
+    if [ -f /tmp/restore_request ]; then
+        local restore_path
+        restore_path=$(cat /tmp/restore_request)
+        rm -f /tmp/restore_request
+        if [ -d "$restore_path" ]; then
+            log::info "Web UI: restore requested from ${restore_path}"
+            if utils::acquire-lock; then
+                backup::restore "$restore_path"
+                events::emit "backup_restored" "path" "$restore_path"
+                utils::release-lock
+                log::info "Web UI: restore complete"
+            fi
+        else
+            log::warning "Web UI: restore path does not exist: ${restore_path}"
+        fi
+    fi
+}
+
+SYNC_TRIGGER="startup"
 run::do-sync || exit 0
 
 if [ "$REPEAT_ACTIVE" != "true" ] && [ "$WEBHOOK_ENABLED" != "true" ]; then
@@ -170,8 +210,11 @@ if [ "$REPEAT_ACTIVE" != "true" ] && [ "$WEBHOOK_ENABLED" != "true" ]; then
 fi
 
 while true; do
+    run::check-restore-request
+
     if webhook::triggered; then
         log::info "Trigger received -- starting sync"
+        SYNC_TRIGGER="webhook"
         run::do-sync || true
     fi
 
@@ -179,14 +222,17 @@ while true; do
         local_interval=5
         elapsed=0
         while [ "$elapsed" -lt "$REPEAT_INTERVAL" ]; do
+            run::check-restore-request
             if webhook::triggered; then
                 log::info "Trigger received -- starting sync"
+                SYNC_TRIGGER="webhook"
                 run::do-sync || true
             fi
             sleep "$local_interval"
             elapsed=$((elapsed + local_interval))
         done
         log::info "Polling interval reached -- starting scheduled sync"
+        SYNC_TRIGGER="schedule"
         run::do-sync || true
     else
         sleep 5
