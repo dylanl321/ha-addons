@@ -493,6 +493,7 @@ function git::push-config {
 
     if git diff --cached --quiet 2>/dev/null; then
         log::info "push_on_start: /config matches the repository -- nothing to push"
+        events::emit "push_on_start_complete" "result" "no_changes"
         return 0
     fi
 
@@ -507,16 +508,20 @@ function git::push-config {
 
 Auto-committed by Custom Git Pull addon (push_on_start)."; then
         log::error "push_on_start: git commit failed"
+        events::emit "push_on_start_failed" "error" "commit failed"
         return 1
     fi
 
     log::info "push_on_start: pushing to ${GIT_REMOTE} ${GIT_BRANCH}..."
     if ! git push "$GIT_REMOTE" "HEAD:${GIT_BRANCH}"; then
         log::error "push_on_start: git push failed -- ensure deploy key has write access"
+        events::emit "push_on_start_failed" "error" "push rejected"
         return 1
     fi
 
+    local push_file_count
+    push_file_count=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | wc -l | tr -d ' ')
     log::info "push_on_start: successfully pushed local /config changes to GitHub"
-    events::emit "push_completed" "target" "push_on_start"
+    events::emit "push_on_start_complete" "result" "pushed" "file_count" "${push_file_count:-0}"
     return 0
 }

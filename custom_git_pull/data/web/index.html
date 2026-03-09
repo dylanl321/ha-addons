@@ -527,6 +527,58 @@ textarea { resize: vertical; font-family: var(--mono); font-size: 13px; }
 .file-ext-py { background: #d1fae5; color: #065f46; }
 .file-ext-json { background: #fef3c7; color: #92400e; }
 .file-ext-other { background: var(--bg); color: var(--text-sec); }
+.file-status {
+  font-size: 10px;
+  font-weight: 700;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  border-radius: 3px;
+  padding: 1px 0;
+}
+.file-status-A { color: var(--success); }
+.file-status-M { color: var(--warning); }
+.file-status-D { color: var(--error); text-decoration: line-through; }
+.file-status-R { color: var(--info); }
+
+/* Error banner */
+.error-banner {
+  display: none;
+  background: var(--error-bg);
+  border: 1px solid var(--error);
+  border-radius: var(--radius);
+  padding: 14px 20px;
+  margin-bottom: 16px;
+  align-items: center;
+  gap: 12px;
+}
+.error-banner.show { display: flex; }
+.error-banner-icon {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: var(--error);
+  color: white;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.error-banner-body { flex: 1; }
+.error-banner-title { font-weight: 600; font-size: 14px; color: var(--error); }
+.error-banner-detail { font-size: 13px; color: var(--text-sec); margin-top: 2px; }
+
+/* Push status card */
+.push-status-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.push-status-inline.success { background: var(--success-bg); color: var(--success); }
+.push-status-inline.failed { background: var(--error-bg); color: var(--error); }
+.push-status-inline.neutral { background: var(--bg); color: var(--text-sec); }
 
 /* Last sync card */
 .last-sync-card {
@@ -659,6 +711,15 @@ textarea { resize: vertical; font-family: var(--mono); font-size: 13px; }
 
   <!-- Dashboard Panel -->
   <div class="panel active" id="panel-dashboard">
+    <div class="error-banner" id="errorBanner">
+      <div class="error-banner-icon">&#10007;</div>
+      <div class="error-banner-body">
+        <div class="error-banner-title">Last sync failed</div>
+        <div class="error-banner-detail" id="errorBannerDetail"></div>
+      </div>
+      <button class="btn-primary btn-sm" onclick="App.triggerSync()">Retry Sync</button>
+    </div>
+    <div class="push-status-inline neutral" id="pushStatus" style="display:none"></div>
     <div class="stats-grid" id="statsGrid"></div>
     <div class="card" id="lastSyncCard" style="display:none">
       <div class="card-header">
@@ -840,11 +901,21 @@ const App = {
     if (s.state === 'syncing') {
       text.textContent = 'Syncing...';
     } else if (s.last_sync) {
-      const t = s.last_sync.type === 'sync_complete' ? 'Last sync: ' : 'Last sync failed: ';
-      text.textContent = t + timeAgo(s.last_sync.ts);
+      const t = s.last_sync.type === 'sync_complete' ? 'Last sync: ' : s.last_sync.type === 'sync_no_changes' ? 'No changes: ' : 'Failed: ';
+      let extra = '';
+      if (s.uptime_since) {
+        extra = ' · Up ' + durationStr(Math.floor(Date.now()/1000) - s.uptime_since);
+      }
+      if (s.next_sync_eta) {
+        const remaining = s.next_sync_eta - Math.floor(Date.now()/1000);
+        if (remaining > 0) extra += ' · Next in ' + durationStr(remaining);
+      }
+      text.textContent = t + timeAgo(s.last_sync.ts) + extra;
       if (s.last_sync.type === 'sync_failed') dot.classList.add('error');
     } else {
-      text.textContent = 'No syncs yet';
+      let extra = '';
+      if (s.uptime_since) extra = ' · Up ' + durationStr(Math.floor(Date.now()/1000) - s.uptime_since);
+      text.textContent = 'No syncs yet' + extra;
     }
   },
 
@@ -852,10 +923,54 @@ const App = {
     const s = this.state.status;
     const stats = s.stats || {};
 
+    // Error banner
+    const eb = document.getElementById('errorBanner');
+    if (s.last_sync && s.last_sync.type === 'sync_failed') {
+      eb.classList.add('show');
+      document.getElementById('errorBannerDetail').textContent = (s.last_sync.error || 'Unknown error') + (s.last_sync.duration ? ' (' + s.last_sync.duration + 's)' : '') + ' · ' + timeAgo(s.last_sync.ts);
+    } else {
+      eb.classList.remove('show');
+    }
+
+    // Push status
+    const ps = document.getElementById('pushStatus');
+    const lp = s.last_push;
+    if (lp) {
+      ps.style.display = '';
+      if (lp.type === 'push_on_start_complete') {
+        if (lp.result === 'pushed') {
+          ps.className = 'push-status-inline success';
+          ps.innerHTML = '&#8593; Push on start: pushed ' + (lp.file_count || '?') + ' file(s) to GitHub · ' + timeAgo(lp.ts);
+        } else {
+          ps.className = 'push-status-inline neutral';
+          ps.innerHTML = '&#8226; Push on start: no local changes to push · ' + timeAgo(lp.ts);
+        }
+      } else {
+        ps.className = 'push-status-inline failed';
+        ps.innerHTML = '&#10007; Push on start failed: ' + esc(lp.error || 'unknown') + ' · ' + timeAgo(lp.ts);
+      }
+    } else {
+      ps.style.display = 'none';
+    }
+
+    // Next sync ETA
+    let nextSyncHtml = '';
+    if (s.next_sync_eta) {
+      const remaining = s.next_sync_eta - Math.floor(Date.now()/1000);
+      if (remaining > 0) {
+        nextSyncHtml = `
+          <div class="stat-card">
+            <div class="stat-label">Next Sync</div>
+            <div class="stat-value" style="font-size:20px">${durationStr(remaining)}</div>
+            <div class="stat-sub">Polling active</div>
+          </div>`;
+      }
+    }
+
     document.getElementById('statsGrid').innerHTML = `
       <div class="stat-card">
         <div class="stat-label">Status</div>
-        <div class="stat-value" style="color: var(--${s.state === 'syncing' ? 'primary' : 'success'})">${s.state === 'syncing' ? 'Syncing' : 'Idle'}</div>
+        <div class="stat-value" style="color: var(--${s.state === 'syncing' ? 'primary' : s.last_sync && s.last_sync.type === 'sync_failed' ? 'error' : 'success'})">${s.state === 'syncing' ? 'Syncing' : s.last_sync && s.last_sync.type === 'sync_failed' ? 'Error' : 'Idle'}</div>
         <div class="stat-sub">${s.last_sync ? timeAgo(s.last_sync.ts) : 'Never synced'}</div>
       </div>
       <div class="stat-card">
@@ -868,11 +983,12 @@ const App = {
         <div class="stat-value text-mono" style="font-size:20px">${s.commit || '---'}</div>
         <div class="stat-sub">${s.branch ? 'on ' + esc(s.branch) : 'No branch'}</div>
       </div>
+      ${nextSyncHtml || `
       <div class="stat-card">
         <div class="stat-label">Backups</div>
         <div class="stat-value">${this.state.backups.length}</div>
         <div class="stat-sub">Available for restore</div>
-      </div>
+      </div>`}
     `;
 
     // Last sync card
@@ -908,14 +1024,25 @@ const App = {
 
     // Changed files card
     const files = s.last_sync_files || [];
+    const filesDetail = s.last_sync_files_detail || [];
     const cfCard = document.getElementById('changedFilesCard');
     if (files.length) {
       cfCard.style.display = '';
       document.getElementById('fileCountBadge').textContent = files.length + ' file' + (files.length === 1 ? '' : 's');
+
+      const detailMap = {};
+      filesDetail.forEach(fd => {
+        const [status, ...rest] = fd.split(':');
+        if (rest.length) detailMap[rest.join(':')] = status;
+      });
+
       document.getElementById('changedFilesList').innerHTML = files.map(f => {
         const ext = f.includes('.') ? f.split('.').pop().toLowerCase() : '';
         const extClass = {'yaml': 'yaml', 'yml': 'yaml', 'py': 'py', 'json': 'json'}[ext] || 'other';
-        return `<div class="file-list-item"><span class="file-ext file-ext-${extClass}">${ext || 'file'}</span><span>${esc(f)}</span></div>`;
+        const status = detailMap[f] || '';
+        const statusLabel = {A: '+', M: '~', D: '-', R: 'R'}[status] || '';
+        const statusHtml = statusLabel ? `<span class="file-status file-status-${status}">${statusLabel}</span>` : '';
+        return `<div class="file-list-item">${statusHtml}<span class="file-ext file-ext-${extClass}">${ext || 'file'}</span><span${status === 'D' ? ' style="text-decoration:line-through;opacity:0.6"' : ''}>${esc(f)}</span></div>`;
       }).join('');
     } else {
       cfCard.style.display = 'none';
@@ -1393,6 +1520,14 @@ function timeAgo(ts) {
   return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function durationStr(seconds) {
+  if (seconds < 60) return seconds + 's';
+  if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return h + 'h ' + m + 'm';
+}
+
 function eventMeta(e) {
   const t = e.type || 'unknown';
   const dur = e.duration ? ` (${e.duration}s)` : '';
@@ -1407,12 +1542,22 @@ function eventMeta(e) {
       if (e.files_changed) {
         const uid = 'fl-' + e.ts;
         const files = e.files_changed.split(',').filter(f => f.trim());
+        const detailMap = {};
+        if (e.files_detail) {
+          e.files_detail.split(',').forEach(fd => {
+            const [st, ...rest] = fd.trim().split(':');
+            if (rest.length) detailMap[rest.join(':')] = st;
+          });
+        }
         syncDetail += `<div class="file-list-toggle" onclick="document.getElementById('${uid}').classList.toggle('open')">Show files &#9662;</div>`;
         syncDetail += `<div class="file-list" id="${uid}">${files.map(f => {
           f = f.trim();
           const ext = f.includes('.') ? f.split('.').pop().toLowerCase() : '';
           const extClass = {'yaml': 'yaml', 'yml': 'yaml', 'py': 'py', 'json': 'json'}[ext] || 'other';
-          return '<div class="file-list-item"><span class="file-ext file-ext-' + extClass + '">' + (ext || 'file') + '</span><span>' + esc(f) + '</span></div>';
+          const st = detailMap[f] || '';
+          const stLabel = {A: '+', M: '~', D: '-', R: 'R'}[st] || '';
+          const stHtml = stLabel ? '<span class="file-status file-status-' + st + '">' + stLabel + '</span>' : '';
+          return '<div class="file-list-item">' + stHtml + '<span class="file-ext file-ext-' + extClass + '">' + (ext || 'file') + '</span><span>' + esc(f) + '</span></div>';
         }).join('')}</div>`;
       }
     }
@@ -1434,6 +1579,8 @@ function eventMeta(e) {
     ha_restarted:     { icon: '&#8635;', color: 'warning',  title: 'HA Restarted',              detail: 'Home Assistant was restarted' },
     webhook_received: { icon: '&#128268;', color: 'info',   title: 'Webhook Received',          detail: e.event ? `GitHub ${e.event} event` + (e.branch ? ` (${e.branch})` : '') : '' },
     push_completed:   { icon: '&#8593;', color: 'success',  title: 'Push Complete',             detail: e.target || '' },
+    push_on_start_complete: { icon: '&#8593;', color: 'success', title: 'Push on Start', detail: e.result === 'pushed' ? (e.file_count || '?') + ' file(s) pushed to GitHub' : 'No local changes to push' },
+    push_on_start_failed: { icon: '&#10007;', color: 'error', title: 'Push on Start Failed', detail: e.error || '' },
     clone_complete:   { icon: '&#10003;', color: 'success', title: 'Initial Clone',             detail: e.commit ? `at <code>${(e.commit||'').slice(0,7)}</code>` : '' },
   };
   return map[t] || { icon: '&#8226;', color: 'info', title: t.replace(/_/g, ' '), detail: JSON.stringify(e) };

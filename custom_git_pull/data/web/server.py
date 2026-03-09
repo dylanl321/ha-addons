@@ -17,6 +17,8 @@ STAGING_DIR = Path("/config/.git_sync_repo")
 OPTIONS_FILE = Path("/data/options.json")
 TRIGGER_FILE = Path("/tmp/webhook_trigger")
 RESTORE_FILE = Path("/tmp/restore_request")
+START_TS_FILE = Path("/tmp/addon_start_ts")
+LAST_SYNC_TS_FILE = Path("/tmp/last_sync_ts")
 WEB_DIR = Path(__file__).parent
 
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -55,6 +57,10 @@ async def api_status(request):
         "recent_commits": [],
         "last_sync": None,
         "last_sync_files": [],
+        "last_sync_files_detail": [],
+        "last_push": None,
+        "uptime_since": None,
+        "next_sync_eta": None,
         "stats": {"total_syncs": 0, "successful": 0, "failed": 0, "no_changes": 0, "backups": 0},
     }
 
@@ -91,10 +97,14 @@ async def api_status(request):
             pass
 
     # Config info
+    repeat_interval = 300
     try:
         opts = json.loads(OPTIONS_FILE.read_text())
         result["repo"] = opts.get("repository", "")
         result["configured_branch"] = opts.get("git_branch", "main")
+        repeat_cfg = opts.get("repeat", {})
+        if repeat_cfg.get("active"):
+            repeat_interval = int(repeat_cfg.get("interval", 300))
     except Exception:
         pass
 
@@ -123,7 +133,32 @@ async def api_status(request):
                 ]
             else:
                 result["last_sync_files"] = []
+            if e.get("files_detail"):
+                result["last_sync_files_detail"] = [
+                    f.strip() for f in e["files_detail"].split(",") if f.strip()
+                ]
             break
+
+    for e in reversed(events):
+        if e.get("type") in ("push_on_start_complete", "push_on_start_failed"):
+            result["last_push"] = e
+            break
+
+    # Uptime
+    try:
+        result["uptime_since"] = int(START_TS_FILE.read_text().strip())
+    except Exception:
+        pass
+
+    # Next sync ETA
+    try:
+        last_ts = int(LAST_SYNC_TS_FILE.read_text().strip())
+        opts_check = json.loads(OPTIONS_FILE.read_text())
+        if opts_check.get("repeat", {}).get("active"):
+            eta = last_ts + repeat_interval
+            result["next_sync_eta"] = eta
+    except Exception:
+        pass
 
     # Syncing state check
     lock = Path("/tmp/git_pull.lock")

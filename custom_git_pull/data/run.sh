@@ -66,6 +66,7 @@ log::init
 safety::ensure-gitignore-entries
 
 # Start web UI server
+date +%s > /tmp/addon_start_ts
 log::info "Starting web UI server on port 8099..."
 python3 /web/server.py &
 WEB_SERVER_PID=$!
@@ -164,15 +165,17 @@ function run::do-sync {
                 return 1
             fi
             if [ -n "${NEW_COMMIT:-}" ] && [ "${NEW_COMMIT:-}" != "${OLD_COMMIT:-}" ]; then
-                local changed_files_list file_count _sync_duration
+                local changed_files_list file_count files_detail _sync_duration
                 changed_files_list=$(cd "$STAGING_DIR" 2>/dev/null && git diff --name-only "$OLD_COMMIT" "$NEW_COMMIT" 2>/dev/null | head -50 | tr '\n' ',' | sed 's/,$//')
                 file_count=$(cd "$STAGING_DIR" 2>/dev/null && git diff --name-only "$OLD_COMMIT" "$NEW_COMMIT" 2>/dev/null | wc -l | tr -d ' ')
+                files_detail=$(cd "$STAGING_DIR" 2>/dev/null && git diff --name-status "$OLD_COMMIT" "$NEW_COMMIT" 2>/dev/null | head -50 | awk '{print $1":"$2}' | tr '\n' ',' | sed 's/,$//')
                 _sync_duration=$(( $(date +%s) - _sync_start_ts ))
                 events::emit "sync_complete" \
                     "old_commit" "${OLD_COMMIT:-}" \
                     "new_commit" "${NEW_COMMIT:-}" \
                     "file_count" "${file_count:-0}" \
                     "files_changed" "${changed_files_list:-}" \
+                    "files_detail" "${files_detail:-}" \
                     "duration" "${_sync_duration}"
                 git::validate-config
             else
@@ -189,6 +192,7 @@ function run::do-sync {
 
         DEPLOY_IN_PROGRESS=""
         utils::release-lock
+        date +%s > /tmp/last_sync_ts
     fi
     return 0
 }

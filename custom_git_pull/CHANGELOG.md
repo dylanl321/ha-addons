@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.5.2
+
+- Add prominent red error banner at top of dashboard when last sync failed,
+  with error details and a Retry button
+- Add next sync countdown in dashboard stats when polling is active
+- Add addon uptime display in the header status bar
+- Add file change type indicators (+ added, ~ modified, - deleted) in both
+  the dashboard Files Changed card and history event file lists
+- Add push_on_start status: dedicated events (push_on_start_complete/failed)
+  and a status bar on the dashboard showing push results
+- Status card now shows "Error" state (red) when last sync failed
+
 ## 3.5.1
 
 - Add "Last Sync" detail card on dashboard showing result, duration, trigger,
