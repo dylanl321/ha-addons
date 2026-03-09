@@ -482,6 +482,73 @@ textarea { resize: vertical; font-family: var(--mono); font-size: 13px; }
 .empty-title { font-size: 16px; font-weight: 500; margin-bottom: 4px; color: var(--text); }
 .empty-desc { font-size: 13px; }
 
+/* ===== File list in events ===== */
+.file-list-toggle {
+  cursor: pointer;
+  color: var(--primary-dark);
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.file-list-toggle:hover { text-decoration: underline; }
+.file-list {
+  display: none;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.8;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.file-list.open { display: block; }
+.file-list-item {
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.file-list-item:last-child { border-bottom: none; }
+.file-ext {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.file-ext-yaml { background: #dbeafe; color: #1e40af; }
+.file-ext-py { background: #d1fae5; color: #065f46; }
+.file-ext-json { background: #fef3c7; color: #92400e; }
+.file-ext-other { background: var(--bg); color: var(--text-sec); }
+
+/* Last sync card */
+.last-sync-card {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 16px;
+}
+.last-sync-field label {
+  font-size: 12px;
+  color: var(--text-sec);
+  font-weight: 500;
+  display: block;
+  margin-bottom: 2px;
+}
+.last-sync-field .val {
+  font-size: 14px;
+  font-weight: 500;
+}
+@media (max-width: 640px) {
+  .last-sync-card { grid-template-columns: 1fr; }
+}
+
 /* ===== Responsive ===== */
 @media (max-width: 640px) {
   .header { padding: 0 12px; }
@@ -593,6 +660,21 @@ textarea { resize: vertical; font-family: var(--mono); font-size: 13px; }
   <!-- Dashboard Panel -->
   <div class="panel active" id="panel-dashboard">
     <div class="stats-grid" id="statsGrid"></div>
+    <div class="card" id="lastSyncCard" style="display:none">
+      <div class="card-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        Last Sync
+      </div>
+      <div class="last-sync-card" id="lastSyncInfo"></div>
+    </div>
+    <div class="card" id="changedFilesCard" style="display:none">
+      <div class="card-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        Files Changed
+        <span class="badge badge-info" id="fileCountBadge"></span>
+      </div>
+      <div id="changedFilesList"></div>
+    </div>
     <div class="card">
       <div class="card-header">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
@@ -779,7 +861,7 @@ const App = {
       <div class="stat-card">
         <div class="stat-label">Total Syncs</div>
         <div class="stat-value">${stats.total_syncs || 0}</div>
-        <div class="stat-sub">${stats.successful || 0} successful, ${stats.failed || 0} failed</div>
+        <div class="stat-sub">${stats.successful || 0} updated, ${stats.no_changes || 0} no changes, ${stats.failed || 0} failed</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Current Commit</div>
@@ -792,6 +874,52 @@ const App = {
         <div class="stat-sub">Available for restore</div>
       </div>
     `;
+
+    // Last sync card
+    const ls = s.last_sync;
+    const lsCard = document.getElementById('lastSyncCard');
+    if (ls) {
+      lsCard.style.display = '';
+      const isSuccess = ls.type === 'sync_complete';
+      const isNoChange = ls.type === 'sync_no_changes';
+      const statusBadge = isSuccess
+        ? '<span class="badge badge-success">Updated</span>'
+        : isNoChange
+          ? '<span class="badge badge-info">No Changes</span>'
+          : '<span class="badge badge-error">Failed</span>';
+      const duration = ls.duration ? ls.duration + 's' : '---';
+      const fileCount = ls.file_count || '0';
+
+      document.getElementById('lastSyncInfo').innerHTML = `
+        <div class="last-sync-field"><label>Result</label><div class="val">${statusBadge}</div></div>
+        <div class="last-sync-field"><label>When</label><div class="val">${ls.ts ? new Date(ls.ts * 1000).toLocaleString() : '---'}</div></div>
+        <div class="last-sync-field"><label>Duration</label><div class="val">${duration}</div></div>
+        ${isSuccess ? `
+          <div class="last-sync-field"><label>Previous Commit</label><div class="val text-mono">${esc((ls.old_commit||'').slice(0,10))}</div></div>
+          <div class="last-sync-field"><label>New Commit</label><div class="val text-mono">${esc((ls.new_commit||'').slice(0,10))}</div></div>
+          <div class="last-sync-field"><label>Files Changed</label><div class="val">${fileCount}</div></div>
+        ` : ''}
+        ${ls.trigger ? `<div class="last-sync-field"><label>Trigger</label><div class="val">${esc(ls.trigger)}</div></div>` : ''}
+        ${ls.error ? `<div class="last-sync-field" style="grid-column:1/-1"><label>Error</label><div class="val" style="color:var(--error)">${esc(ls.error)}</div></div>` : ''}
+      `;
+    } else {
+      lsCard.style.display = 'none';
+    }
+
+    // Changed files card
+    const files = s.last_sync_files || [];
+    const cfCard = document.getElementById('changedFilesCard');
+    if (files.length) {
+      cfCard.style.display = '';
+      document.getElementById('fileCountBadge').textContent = files.length + ' file' + (files.length === 1 ? '' : 's');
+      document.getElementById('changedFilesList').innerHTML = files.map(f => {
+        const ext = f.includes('.') ? f.split('.').pop().toLowerCase() : '';
+        const extClass = {'yaml': 'yaml', 'yml': 'yaml', 'py': 'py', 'json': 'json'}[ext] || 'other';
+        return `<div class="file-list-item"><span class="file-ext file-ext-${extClass}">${ext || 'file'}</span><span>${esc(f)}</span></div>`;
+      }).join('');
+    } else {
+      cfCard.style.display = 'none';
+    }
 
     document.getElementById('gitInfo').innerHTML = `
       <div class="git-field"><label>Repository</label><div class="val">${esc(s.repo || 'Not configured')}</div></div>
@@ -1267,12 +1395,36 @@ function timeAgo(ts) {
 
 function eventMeta(e) {
   const t = e.type || 'unknown';
+  const dur = e.duration ? ` (${e.duration}s)` : '';
+
+  // Build file list detail for sync_complete
+  let syncDetail = '';
+  if (t === 'sync_complete' && e.new_commit) {
+    syncDetail = `<code>${(e.old_commit||'').slice(0,7)}</code> &rarr; <code>${(e.new_commit||'').slice(0,7)}</code>`;
+    const fc = parseInt(e.file_count || '0');
+    if (fc > 0) {
+      syncDetail += ` &middot; ${fc} file${fc === 1 ? '' : 's'}`;
+      if (e.files_changed) {
+        const uid = 'fl-' + e.ts;
+        const files = e.files_changed.split(',').filter(f => f.trim());
+        syncDetail += `<div class="file-list-toggle" onclick="document.getElementById('${uid}').classList.toggle('open')">Show files &#9662;</div>`;
+        syncDetail += `<div class="file-list" id="${uid}">${files.map(f => {
+          f = f.trim();
+          const ext = f.includes('.') ? f.split('.').pop().toLowerCase() : '';
+          const extClass = {'yaml': 'yaml', 'yml': 'yaml', 'py': 'py', 'json': 'json'}[ext] || 'other';
+          return '<div class="file-list-item"><span class="file-ext file-ext-' + extClass + '">' + (ext || 'file') + '</span><span>' + esc(f) + '</span></div>';
+        }).join('')}</div>`;
+      }
+    }
+    syncDetail += dur;
+  }
+
   const map = {
     sync_start:       { icon: '&#8635;', color: 'info',    title: 'Sync Started',              detail: e.trigger ? `Triggered by ${e.trigger}` : '' },
-    sync_complete:    { icon: '&#10003;', color: 'success', title: 'Sync Complete',              detail: e.new_commit ? `<code>${(e.old_commit||'').slice(0,7)}</code> &rarr; <code>${(e.new_commit||'').slice(0,7)}</code>${e.files_changed ? ' &middot; ' + e.files_changed + ' file(s)' : ''}` : 'No changes' },
-    sync_failed:      { icon: '&#10007;', color: 'error',   title: 'Sync Failed',               detail: e.error || '' },
+    sync_complete:    { icon: '&#10003;', color: 'success', title: 'Sync Complete',              detail: syncDetail || ('No changes' + dur) },
+    sync_failed:      { icon: '&#10007;', color: 'error',   title: 'Sync Failed',               detail: (e.error || '') + dur },
     sync_requested:   { icon: '&#9654;',  color: 'info',    title: 'Sync Requested',            detail: e.trigger ? `via ${e.trigger}` : '' },
-    sync_no_changes:  { icon: '&#8226;',  color: 'info',    title: 'No Changes',                detail: 'Repository is up to date' },
+    sync_no_changes:  { icon: '&#8226;',  color: 'info',    title: 'No Changes',                detail: 'Repository is up to date' + dur },
     backup_created:   { icon: '&#128230;', color: 'info',   title: 'Backup Created',            detail: e.path ? e.path.split('/').pop() + (e.size ? ` (${e.size})` : '') : '' },
     backup_restored:  { icon: '&#8634;', color: 'warning',  title: 'Backup Restored',           detail: e.path ? 'From ' + e.path.split('/').pop() : '' },
     deploy_start:     { icon: '&#128640;', color: 'info',   title: 'Deploy Started',            detail: '' },

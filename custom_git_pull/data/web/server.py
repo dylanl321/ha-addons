@@ -54,7 +54,8 @@ async def api_status(request):
         "commit_date": None,
         "recent_commits": [],
         "last_sync": None,
-        "stats": {"total_syncs": 0, "successful": 0, "failed": 0, "backups": 0},
+        "last_sync_files": [],
+        "stats": {"total_syncs": 0, "successful": 0, "failed": 0, "no_changes": 0, "backups": 0},
     }
 
     # Git info from staging repo
@@ -104,6 +105,9 @@ async def api_status(request):
         if t == "sync_complete":
             result["stats"]["total_syncs"] += 1
             result["stats"]["successful"] += 1
+        elif t == "sync_no_changes":
+            result["stats"]["total_syncs"] += 1
+            result["stats"]["no_changes"] += 1
         elif t == "sync_failed":
             result["stats"]["total_syncs"] += 1
             result["stats"]["failed"] += 1
@@ -111,8 +115,14 @@ async def api_status(request):
             result["stats"]["backups"] += 1
 
     for e in reversed(events):
-        if e.get("type") in ("sync_complete", "sync_failed"):
+        if e.get("type") in ("sync_complete", "sync_failed", "sync_no_changes"):
             result["last_sync"] = e
+            if e.get("files_changed"):
+                result["last_sync_files"] = [
+                    f.strip() for f in e["files_changed"].split(",") if f.strip()
+                ]
+            else:
+                result["last_sync_files"] = []
             break
 
     # Syncing state check

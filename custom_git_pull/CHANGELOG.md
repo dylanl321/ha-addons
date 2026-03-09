@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.5.1
+
+- Add "Last Sync" detail card on dashboard showing result, duration, trigger,
+  commit range, and file count
+- Add "Files Changed" card on dashboard showing all files from the last sync
+  with color-coded extension badges
+- Add expandable file lists in sync history events (click "Show files" to view)
+- Track sync duration in all events (sync_complete, sync_no_changes, sync_failed)
+- Track no_changes count separately in stats
+- Fix files_changed display: was showing raw comma string, now properly parsed
+
 ## 3.5.0
 
 - Add interactive web UI accessible from the Home Assistant sidebar via ingress

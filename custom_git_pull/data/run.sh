@@ -153,6 +153,8 @@ function run::do-sync {
         NEW_COMMIT=""
 
         events::emit "sync_start" "trigger" "${SYNC_TRIGGER:-schedule}"
+        local _sync_start_ts
+        _sync_start_ts=$(date +%s)
 
         if git::synchronize; then
             if [ "$DEPLOY_DRY_RUN" == "true" ]; then
@@ -162,19 +164,27 @@ function run::do-sync {
                 return 1
             fi
             if [ -n "${NEW_COMMIT:-}" ] && [ "${NEW_COMMIT:-}" != "${OLD_COMMIT:-}" ]; then
-                local changed_files_list
+                local changed_files_list file_count _sync_duration
                 changed_files_list=$(cd "$STAGING_DIR" 2>/dev/null && git diff --name-only "$OLD_COMMIT" "$NEW_COMMIT" 2>/dev/null | head -50 | tr '\n' ',' | sed 's/,$//')
+                file_count=$(cd "$STAGING_DIR" 2>/dev/null && git diff --name-only "$OLD_COMMIT" "$NEW_COMMIT" 2>/dev/null | wc -l | tr -d ' ')
+                _sync_duration=$(( $(date +%s) - _sync_start_ts ))
                 events::emit "sync_complete" \
                     "old_commit" "${OLD_COMMIT:-}" \
                     "new_commit" "${NEW_COMMIT:-}" \
-                    "files_changed" "${changed_files_list:-0}"
+                    "file_count" "${file_count:-0}" \
+                    "files_changed" "${changed_files_list:-}" \
+                    "duration" "${_sync_duration}"
                 git::validate-config
             else
-                events::emit "sync_no_changes"
+                local _sync_duration
+                _sync_duration=$(( $(date +%s) - _sync_start_ts ))
+                events::emit "sync_no_changes" "duration" "${_sync_duration}"
             fi
             git::push-local-changes
         else
-            events::emit "sync_failed" "error" "git synchronize failed"
+            local _sync_duration
+            _sync_duration=$(( $(date +%s) - _sync_start_ts ))
+            events::emit "sync_failed" "error" "git synchronize failed" "duration" "${_sync_duration}"
         fi
 
         DEPLOY_IN_PROGRESS=""
